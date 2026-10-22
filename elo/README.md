@@ -6,8 +6,11 @@ tópico e disponibilidade de horário — e transformar cada atendimento em hora
 dados para a coordenação.
 
 Construído sobre a mesma base do **Frenly** (projeto anterior da equipe): Next.js 16 (App
-Router) + React 19 + TypeScript strict + Tailwind v4 + Motion + Zustand + TanStack Query, com
-backend REST em JSON atômico. O design system é o mesmo; o domínio é do Elo.
+Router) + React 19 + TypeScript strict + Tailwind v4 + Motion + Zustand + TanStack Query. O
+design system é o mesmo; o domínio é do Elo.
+
+**Banco:** Postgres (Neon) em produção, arquivo JSON no desenvolvimento — a troca é
+automática, pela presença de `DATABASE_URL`. Deploy passo a passo em [`DEPLOY.md`](DEPLOY.md).
 
 ---
 
@@ -18,6 +21,9 @@ npm install
 npm run dev        # http://localhost:3000  (TZ=America/Sao_Paulo)
 npm run build      # build de produção (turbopack)
 npm run typecheck  # tsc --noEmit
+
+npm run test:db    # testa o store Postgres contra um Postgres real (PGlite)
+npm run test:db:pg # testa o caminho completo pg.Pool → store → repositório
 ```
 
 Para restaurar a base de demonstração:
@@ -81,9 +87,13 @@ calibrá-los no piloto — a tela existe exatamente para isso.
 - **Não há autenticação.** O Frenly é single-tenant e este projeto também. O seletor **"Ver
   como"** na topbar troca entre Estudante, Monitor e Coordenação, mudando navegação e painel.
   É uma simulação declarada — não finge segurança que não existe.
-- **Banco JSON no servidor** (`data/elo.json`), escrita atômica (tmp + rename) e fila de escrita.
-  O contrato de `lib/api.ts` + `lib/server/repository.ts` é o que muda numa migração para
-  Postgres/Supabase — nenhum componente precisa ser tocado.
+- **Duas persistências, um contrato.** `lib/server/db.ts` escolhe o driver: com
+  `DATABASE_URL` usa Postgres (Neon), via 11 tabelas relacionais em `db/schema.sql`, criadas
+  automaticamente no primeiro acesso; sem a variável, grava em `data/elo.json` com escrita
+  atômica. `lib/server/repository.ts` e as rotas de API não sabem a diferença.
+  Cada mutação grava um snapshot completo em transação com advisory lock — simples e seguro
+  na escala do piloto (~35 KB); quando crescer, o próximo passo é trocar por updates
+  incrementais, sem tocar na interface.
 - **Dados fictícios** com semente determinística (`lib/server/seed.ts`): 22 estudantes, 8
   monitores, 35 pedidos, 6 tópicos (História sem monitor, para evidenciar demanda desassistida).
 - **Acessibilidade**: foco visível global, `aria-pressed` nos chips, `role="dialog"` com Esc e
@@ -100,25 +110,41 @@ app/
   (app)/agenda            semana de sessões
   (app)/relatorios        indicadores, horas, demanda, SLA
   (app)/configuracoes     pesos, aparência, perfil, LGPD, reset
-  api/                    dashboard · requests · sessions · monitors · reports · settings · profile · admin/reset
+  api/                    dashboard · requests · sessions · monitors · reports · settings · profile · health · admin/reset
 components/               ui.tsx (panel, chip, button, dialog, segmented…), charts, stat-card, requests/, shell/
 lib/
   types.ts                modelo de domínio (HelpRequest, Monitor, Session, Match…)
   pairing.ts              algoritmo + SLA
   server/seed.ts          semente determinística
-  server/db.ts            store JSON atômico
+  server/db.ts            fachada: Postgres (Neon) ou JSON, conforme DATABASE_URL
+  server/store/json.ts    store em arquivo, escrita atômica
+  server/store/postgres.ts store Postgres (DDL, snapshot, leitura)
   server/repository.ts    agregados e mutações
   api.ts                  camada de acesso do cliente (contrato)
 store/ui.ts               papel, accent, tema, sidebar (Zustand)
 docs/screens/             capturas de QA (desktop, mobile, dark, fluxo completo)
+db/schema.sql             esquema relacional (11 tabelas) — referência legível
+scripts/                  testes do driver Postgres (PGlite) e servidor de teste
+```
+
+### Endpoint de diagnóstico
+
+`GET /api/health` responde qual driver está ativo, a latência e a contagem de registros —
+é o primeiro lugar para olhar depois de configurar o banco no Vercel:
+
+```json
+{ "ok": true, "driver": "postgres", "latencyMs": 42,
+  "counts": { "topics": 6, "students": 22, "monitors": 8, "requests": 33, "sessions": 37 } }
 ```
 
 ## O que ficou fora (por decisão)
 
-- Autenticação real, multiusuário e permissões.
+- Autenticação real, multiusuário e permissões (a base é single-tenant, como no Frenly).
 - Notificações push/e-mail (o pedido pareado não avisa ninguém — na vida real, avisaria).
 - Integração com SUAP para importar turmas e matrículas.
 - Aplicativo instalável (PWA): o documento prevê, a demo roda no navegador.
+- Migração para tabelas normalizadas com updates incrementais — hoje o schema já é
+  relacional, mas a escrita ainda é snapshot completo (ver `db/schema.sql`).
 - Chat entre estudante e monitor.
 
 ## Referências usadas no desenho

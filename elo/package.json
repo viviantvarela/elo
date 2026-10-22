@@ -6,7 +6,9 @@
     "dev": "TZ=America/Sao_Paulo next dev -H 0.0.0.0 -p 3000",
     "build": "TZ=America/Sao_Paulo next build",
     "start": "TZ=America/Sao_Paulo next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:db": "tsx --conditions=react-server scripts/test-postgres.mts",
+    "test:db:pg": "tsx --conditions=react-server scripts/test-e2e-pg.mts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.11",
@@ -16,19 +18,28 @@
     "lucide-react": "^0.469.0",
     "motion": "^11.18.0",
     "next": "16.4.2",
+    "pg": "^8.23.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
+    "server-only": "^0.0.1",
     "sonner": "^1.7.2",
     "tailwind-merge": "^2.6.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.11",
+    "@electric-sql/pglite-socket": "^0.2.14",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.4",
     "@types/react-dom": "^19.0.2",
     "postcss": "^8.5.1",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

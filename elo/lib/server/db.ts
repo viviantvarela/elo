@@ -1,70 +1,76 @@
 import "server-only";
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
-
-import { buildSeed, type Database } from "./seed";
+import type { Database } from "./seed";
 
 /**
- * Banco de demonstração: um único arquivo JSON, com escrita atômica
- * (tmp + rename) e fila de escrita por processo. É o mesmo padrão do Frenly —
- * o contrato de `lib/server/repository.ts` é o que muda numa migração para
- * Postgres/Supabase.
+ * Fachada de persistência.
+ *
+ *  - `DATABASE_URL` definido  → Postgres (Neon no Vercel)
+ *  - sem `DATABASE_URL`       → arquivo JSON em `data/elo.json` (local/preview)
+ *
+ * As rotas de API e o repositório importam só daqui, então trocar de driver
+ * não toca em nenhum componente de interface.
  */
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "elo.json");
+type Store = {
+  readDb: () => Promise<Database>;
+  updateDb: (mutator: (database: Database) => Database | void) => Promise<Database>;
+  resetDb: () => Promise<Database>;
+};
 
-let cache: Database | null = null;
-let queue: Promise<unknown> = Promise.resolve();
+let storePromise: Promise<Store> | null = null;
 
-async function load(): Promise<Database> {
-  if (cache) return cache;
+async function createStore(): Promise<Store> {
+  const url = process.env.DATABASE_URL;
 
-  try {
-    const raw = await fs.readFile(DATA_FILE, "utf8");
-    cache = JSON.parse(raw) as Database;
-    return cache;
-  } catch {
-    const seed = buildSeed();
-    cache = seed;
-    await persist(seed);
-    return seed;
+  if (!url) {
+    // No Vercel o filesystem é somente leitura: sem banco, falhe com mensagem clara
+    // em vez de "perder" dados silenciosamente em cada lambda.
+    if (process.env.VERCEL) {
+      throw new Error(
+        "DATABASE_URL não configurada. Adicione a connection string do Neon em Settings → Environment Variables e faça o redeploy.",
+      );
+    }
+    return import("./store/json");
   }
+
+  const { default: pg } = await import("pg");
+  const { createPostgresStore } = await import("./store/postgres");
+
+  const isLocal = /localhost|127\.0\.0\.1/.test(url);
+  const pool = new pg.Pool({
+    connectionString: url,
+    ssl: isLocal ? undefined : { rejectUnauthorized: false },
+    max: Number(process.env.PG_POOL_MAX ?? 3),
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 15_000,
+  });
+
+  return createPostgresStore({
+    query: async <T,>(text: string, values?: unknown[]) => {
+      const result = await pool.query(text, values as unknown[] | undefined);
+      return { rows: result.rows as T[] };
+    },
+  });
 }
 
-async function persist(database: Database) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  const tmp = `${DATA_FILE}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(database, null, 2), "utf8");
-  await fs.rename(tmp, DATA_FILE);
+function store(): Promise<Store> {
+  if (!storePromise) storePromise = createStore();
+  return storePromise;
 }
 
-/** Leitura com snapshot imutável — evita mutação acidental do cache. */
-export async function readDb(): Promise<Database> {
-  const database = await load();
-  return structuredClone(database);
+export function readDb() {
+  return store().then((driver) => driver.readDb());
 }
 
-/** Atualização transacional: recebe o snapshot e devolve o novo estado. */
-export async function updateDb(mutator: (database: Database) => Database | void): Promise<Database> {
-  const run = async () => {
-    const database = await load();
-    const draft = structuredClone(database);
-    const result = mutator(draft);
-    const next = result ?? draft;
-    cache = next;
-    await persist(next);
-    return structuredClone(next);
-  };
-
-  queue = queue.then(run, run);
-  return queue as Promise<Database>;
+export function updateDb(mutator: (database: Database) => Database | void) {
+  return store().then((driver) => driver.updateDb(mutator));
 }
 
-export async function resetDb(): Promise<Database> {
-  const seed = buildSeed();
-  cache = seed;
-  await persist(seed);
-  return structuredClone(seed);
+export function resetDb() {
+  return store().then((driver) => driver.resetDb());
+}
+
+export function usingPostgres() {
+  return Boolean(process.env.DATABASE_URL);
 }
