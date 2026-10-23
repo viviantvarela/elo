@@ -10,7 +10,10 @@ export type AccentKey = "green" | "ocean" | "plum" | "rose" | "amber";
 
 export type PastelKey = "peach" | "blue" | "sage" | "sand" | "lilac";
 
-/** Papel simulado na demo (não há autenticação — ver README). */
+/**
+ * Papel de quem está usando o Elo. Ainda não há login: o usuário é escolhido
+ * no menu do topo e vale para o navegador (ver `lib/current-user.ts`).
+ */
 export type Role = "student" | "monitor" | "coordinator";
 
 /* ------------------------------- catálogo -------------------------------- */
@@ -190,8 +193,13 @@ export interface Settings {
   retentionDays: number;
 }
 
+/**
+ * Conta da coordenação. Começa em branco (sem pessoa fictícia) e é preenchida
+ * em Configurações → Meu perfil.
+ */
 export interface DemoProfile {
   id: string;
+  /** vazio até a coordenação preencher o próprio nome */
   name: string;
   role: Role;
   className: string;

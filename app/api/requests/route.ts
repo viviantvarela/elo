@@ -1,7 +1,20 @@
-import { badRequest, notFound, ok, readJson, searchParam, serverError } from "@/lib/server/http";
+import { badRequest, conflict, notFound, ok, readJson, searchParam, serverError } from "@/lib/server/http";
 import { readDb, updateDb } from "@/lib/server/db";
 import { findRequest, listRequests, matchesFor, nextId } from "@/lib/server/repository";
+import { cleanParagraph, sanitizeSlots } from "@/lib/server/validate";
 import type { HelpRequest, Session, Slot, Urgency } from "@/lib/types";
+
+const urgencies: Urgency[] = ["low", "normal", "high"];
+
+type Action = NonNullable<PatchPayload["action"]>;
+
+/** Em que estados cada ação faz sentido — evita sessão duplicada, pedido concluído cancelado etc. */
+const transitions: Record<Action, { from: HelpRequest["status"][]; message: string }> = {
+  match: { from: ["open", "matched"], message: "Este pedido já foi agendado ou encerrado." },
+  schedule: { from: ["open", "matched"], message: "Este pedido já foi agendado ou encerrado." },
+  cancel: { from: ["open", "matched"], message: "Só dá para cancelar pedidos que ainda não foram agendados." },
+  reopen: { from: ["matched", "cancelled", "done"], message: "Este pedido não pode voltar para a fila agora." },
+};
 
 export const dynamic = "force-dynamic";
 
@@ -59,11 +72,20 @@ export async function POST(request: Request) {
   if (!payload.studentId || !payload.topicId) {
     return badRequest("Selecione o estudante e o tópico do pedido.");
   }
-  if (!payload.preferred || payload.preferred.length === 0) {
+  const preferred = sanitizeSlots(payload.preferred);
+  if (!preferred || preferred.length === 0) {
     return badRequest("Escolha ao menos um horário possível para o atendimento.");
   }
 
   try {
+    const current = await readDb();
+    if (!current.students.some((student) => student.id === payload.studentId)) {
+      return badRequest("Estudante não encontrado. Atualize a página e tente de novo.");
+    }
+    if (!current.topics.some((topic) => topic.id === payload.topicId)) {
+      return badRequest("Tópico não encontrado.");
+    }
+
     const out = { id: "" };
 
     const db = await updateDb((draft) => {
@@ -71,11 +93,11 @@ export async function POST(request: Request) {
         id: nextId("r", draft.requests),
         studentId: payload.studentId,
         topicId: payload.topicId,
-        note: payload.note?.trim() || "Sem detalhes adicionais.",
-        urgency: payload.urgency ?? "normal",
+        note: cleanParagraph(payload.note, 500) || "Sem detalhes adicionais.",
+        urgency: urgencies.includes(payload.urgency) ? payload.urgency : "normal",
         status: "open",
         createdAt: new Date().toISOString(),
-        preferred: payload.preferred,
+        preferred,
       };
       draft.requests.push(created);
       out.id = created.id;
@@ -94,7 +116,32 @@ export async function PATCH(request: Request) {
   const payload = await readJson<PatchPayload>(request);
   if (!payload?.id) return badRequest("Informe o pedido que deseja atualizar.");
 
+  if (payload.action === "match" && !payload.monitorId) return badRequest("Escolha o monitor do pedido.");
+  if (payload.action === "schedule") {
+    if (!payload.startsAt || Number.isNaN(Date.parse(payload.startsAt))) {
+      return badRequest("Escolha o horário do atendimento.");
+    }
+    if (payload.minutes !== undefined && (!Number.isInteger(payload.minutes) || payload.minutes <= 0 || payload.minutes > 240)) {
+      return badRequest("Duração inválida.");
+    }
+  }
+
   try {
+    const current = await readDb();
+    const existing = current.requests.find((item) => item.id === payload.id);
+    if (!existing) return notFound("Pedido não encontrado.");
+
+    if (payload.action) {
+      const rule = transitions[payload.action];
+      if (!rule) return badRequest("Ação desconhecida.");
+      if (!rule.from.includes(existing.status)) return conflict(rule.message);
+    }
+
+    const monitorId = payload.monitorId ?? (payload.action === "schedule" ? existing.monitorId : undefined);
+    if ((payload.action === "match" || payload.action === "schedule") && !current.monitors.some((m) => m.id === monitorId)) {
+      return badRequest("Monitor não encontrado.");
+    }
+
     const out = { session: null as Session | null };
 
     const db = await updateDb((draft) => {

@@ -385,16 +385,6 @@ export function buildSeed(now = new Date()): Database {
     retentionDays: 365,
   };
 
-  const profile: DemoProfile = {
-    id: "u1",
-    name: "Marina Duarte",
-    role: "coordinator",
-    className: "Coordenação pedagógica",
-    email: "marina.duarte@ifrn.edu.br",
-    campus: "IFRN — Campus Parnamirim",
-    coordinatorView: true,
-  };
-
   return {
     topics,
     students,
@@ -402,7 +392,23 @@ export function buildSeed(now = new Date()): Database {
     requests,
     sessions,
     settings,
-    profile,
+    profile: blankCoordinatorProfile(),
     meta: { createdAt: now.toISOString(), version: 1 },
+  };
+}
+
+/**
+ * Conta da coordenação. Começa em branco, sem pessoa fictícia: quem usa o Elo
+ * preenche nome e e-mail em Configurações → Meu perfil.
+ */
+export function blankCoordinatorProfile(): DemoProfile {
+  return {
+    id: "u1",
+    name: "",
+    role: "coordinator",
+    className: "Coordenação pedagógica",
+    email: "",
+    campus: "IFRN — Campus Parnamirim",
+    coordinatorView: true,
   };
 }

@@ -554,11 +554,10 @@ export function createPostgresStore(queryable: Queryable) {
     return next;
   }
 
-  async function resetDb(): Promise<Database> {
+  async function resetDb(seed: Database = buildSeed()): Promise<Database> {
     await ensureSchema();
-    const seeded = buildSeed();
-    await writeSnapshot(seeded);
-    return seeded;
+    await writeSnapshot(seed);
+    return seed;
   }
 
   return { readDb, updateDb, resetDb };

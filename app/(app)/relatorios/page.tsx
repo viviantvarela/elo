@@ -7,6 +7,7 @@ import { DistributionBars, HBars } from "@/components/charts";
 import { PageHeader } from "@/components/page-header";
 import { Avatar, Button, Chip, EmptyState, Panel, PanelHeader, ProgressBar, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useCurrentUser } from "@/lib/current-user";
 import { dateLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,7 @@ function toCsv(rows: (string | number)[][]) {
 }
 
 export default function RelatoriosPage() {
+  const { user } = useCurrentUser();
   const { data, isLoading } = useQuery({ queryKey: ["reports"], queryFn: api.getReports });
 
   if (isLoading || !data) {
@@ -132,11 +134,18 @@ export default function RelatoriosPage() {
             </thead>
             <tbody>
               {data.hoursByMonitor.map((row) => (
-                <tr key={row.monitorId} className="rounded-[12px] transition-colors hover:bg-surface-muted/60">
+                <tr
+                  key={row.monitorId}
+                  className={cn(
+                    "rounded-[12px] transition-colors hover:bg-surface-muted/60",
+                    user?.role === "monitor" && user.id === row.monitorId && "bg-accent-tint",
+                  )}
+                >
                   <td className="rounded-l-[12px] px-2 py-2">
                     <span className="flex items-center gap-2">
                       <Avatar name={row.name} color={row.color} size="xs" />
                       <span className="text-[12.5px] font-medium text-ink">{row.name}</span>
+                      {user?.role === "monitor" && user.id === row.monitorId ? <Chip tone="accent">você</Chip> : null}
                     </span>
                   </td>
                   <td className="num px-2 py-2 text-right text-[12.5px] text-ink-soft">{row.sessions}</td>

@@ -207,6 +207,44 @@ export function Select({ className, children, ...props }: SelectHTMLAttributes<H
   );
 }
 
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+  className,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  /** nome acessível do controle */
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:pointer-events-none disabled:opacity-45",
+        checked ? "bg-accent" : "bg-surface-muted ring-1 ring-inset ring-line",
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "absolute left-0 top-0.5 size-4 rounded-full bg-white shadow transition-transform",
+          checked ? "translate-x-[18px]" : "translate-x-0.5",
+        )}
+      />
+    </button>
+  );
+}
+
 /* -------------------------------- segmented -------------------------------- */
 
 export function Segmented<T extends string>({

@@ -49,6 +49,17 @@ export const navItems = [
   { href: "/configuracoes", label: "Configurações", icon: "settings", roles: ["coordinator", "monitor", "student"] },
 ] as const;
 
+/** A página (pelo caminho) está liberada para este papel? Usa as mesmas regras do menu. */
+export function canAccess(pathname: string, role: Role) {
+  const item = navItems.find((entry) => pathname === entry.href || pathname.startsWith(`${entry.href}/`));
+  return item ? (item.roles as readonly Role[]).includes(role) : true;
+}
+
+export const monitorKindLabels = {
+  bolsista: "bolsista",
+  voluntario: "voluntário(a)",
+} as const;
+
 export const accentOptions = [
   { key: "green", label: "Verde Elo" },
   { key: "ocean", label: "Oceano" },

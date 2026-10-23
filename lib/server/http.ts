@@ -12,6 +12,11 @@ export function notFound(message = "Não encontrado") {
   return NextResponse.json({ error: message }, { status: 404 });
 }
 
+/** A ação não vale para o estado atual do registro (ex.: cancelar um pedido já concluído). */
+export function conflict(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
+}
+
 export function serverError(message = "Falha interna ao processar a requisição") {
   return NextResponse.json({ error: message }, { status: 500 });
 }

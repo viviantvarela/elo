@@ -24,8 +24,8 @@ export async function PATCH(request: Request) {
         ...payload,
         weights: { ...draft.settings.weights, ...(payload.weights ?? {}) },
       };
-      // o papel escolhido na topbar também alimenta o perfil de demonstração
-      if (payload.role) draft.profile.role = payload.role;
+      // o papel de quem está usando o Elo é escolhido em cada navegador (menu do
+      // usuário); o perfil salvo continua sendo a conta da coordenação
     });
     return ok({ settings: db.settings, profile: db.profile });
   } catch {

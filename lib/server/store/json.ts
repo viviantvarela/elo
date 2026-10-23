@@ -58,9 +58,14 @@ export async function updateDb(mutator: (database: Database) => Database | void)
   return queue as Promise<Database>;
 }
 
-export async function resetDb(): Promise<Database> {
-  const seed = buildSeed();
-  cache = seed;
-  await persist(seed);
-  return structuredClone(seed);
+export async function resetDb(seed: Database = buildSeed()): Promise<Database> {
+  const run = async () => {
+    cache = seed;
+    await persist(seed);
+    return structuredClone(seed);
+  };
+
+  // entra na mesma fila das escritas para não intercalar com um updateDb em curso
+  queue = queue.then(run, run);
+  return queue as Promise<Database>;
 }
