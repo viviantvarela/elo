@@ -69,7 +69,8 @@ export function getDashboard(db: Database, now = new Date()): DashboardSummary {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const hoursThisMonth = sessions
     .filter((session) => new Date(session.startsAt) >= monthStart && new Date(session.startsAt) <= now)
-    .reduce((sum, session) => sum + session.minutes, 0);
+    // falta não vira hora de monitoria
+    .reduce((sum, session) => sum + (session.attendance === "absent" ? 0 : session.minutes), 0);
 
   const reachStudents = new Set(requests.map((request) => request.studentId)).size;
   const rated = sessions.filter((session) => typeof session.rating === "number");
@@ -248,7 +249,7 @@ export function getReports(db: Database, now = new Date()): ReportPayload {
   const hoursByMonitor = db.monitors
     .map((monitor) => {
       const mine = sessions.filter((session) => session.monitorId === monitor.id);
-      const minutes = mine.reduce((sum, session) => sum + session.minutes, 0);
+      const minutes = mine.reduce((sum, session) => sum + (session.attendance === "absent" ? 0 : session.minutes), 0);
       const last = mine
         .map((session) => session.startsAt)
         .sort((a, b) => +new Date(b) - +new Date(a))[0] ?? null;

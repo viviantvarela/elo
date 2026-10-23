@@ -7,20 +7,40 @@ import type { AccentKey, Role } from "@/lib/types";
 
 type Theme = "light" | "dark";
 
+/**
+ * Estado de interface + quem está usando o Elo neste navegador.
+ *
+ * Ainda não há login: o usuário é escolhido em "Trocar de usuário" (menu do
+ * topo) e a escolha fica salva no navegador. Quando a tela de login chegar,
+ * `role`, `studentId` e `monitorId` passam a vir da sessão autenticada — as
+ * telas leem tudo por `useCurrentUser()` e não precisam mudar.
+ */
 interface UiState {
   role: Role;
+  /** estudante ativo quando `role` é "student" */
+  studentId: string | null;
+  /** monitor ativo quando `role` é "monitor" */
+  monitorId: string | null;
   accent: AccentKey;
   theme: Theme;
   sidebarOpen: boolean;
+  /** diálogo "Trocar de usuário" (aberto pelo menu do topo, ⌘K ou Configurações) */
+  switcherOpen: boolean;
   hydrated: boolean;
   hydrate: () => void;
-  setRole: (role: Role) => void;
+  setIdentity: (role: Role, personId?: string | null) => void;
   setAccent: (accent: AccentKey) => void;
   setTheme: (theme: Theme) => void;
   setSidebarOpen: (open: boolean) => void;
+  setSwitcherOpen: (open: boolean) => void;
 }
 
 const KEY = "elo.ui.v1";
+
+const roles: Role[] = ["student", "monitor", "coordinator"];
+const accents: AccentKey[] = ["green", "ocean", "plum", "rose", "amber"];
+
+type Persisted = Pick<UiState, "role" | "studentId" | "monitorId" | "accent" | "theme">;
 
 function apply(accent: AccentKey, theme: Theme) {
   if (typeof document === "undefined") return;
@@ -28,23 +48,42 @@ function apply(accent: AccentKey, theme: Theme) {
   document.documentElement.classList.toggle("dark", theme === "dark");
 }
 
+function save(state: Persisted) {
+  safeStorage.set(KEY, JSON.stringify(state));
+}
+
+function snapshot(state: UiState): Persisted {
+  return {
+    role: state.role,
+    studentId: state.studentId,
+    monitorId: state.monitorId,
+    accent: state.accent,
+    theme: state.theme,
+  };
+}
+
 export const useUi = create<UiState>((set, get) => ({
   role: "coordinator",
+  studentId: null,
+  monitorId: null,
   accent: "green",
   theme: "light",
   sidebarOpen: false,
+  switcherOpen: false,
   hydrated: false,
 
   hydrate: () => {
     if (get().hydrated) return;
     try {
       const raw = safeStorage.get(KEY);
-      const saved = raw ? (JSON.parse(raw) as Partial<UiState>) : {};
-      const accent = saved.accent ?? "green";
-      const theme = saved.theme ?? "light";
+      const saved = raw ? (JSON.parse(raw) as Partial<Persisted>) : {};
+      const accent = saved.accent && accents.includes(saved.accent) ? saved.accent : "green";
+      const theme = saved.theme === "dark" ? "dark" : "light";
       apply(accent, theme);
       set({
-        role: saved.role ?? "coordinator",
+        role: saved.role && roles.includes(saved.role) ? saved.role : "coordinator",
+        studentId: typeof saved.studentId === "string" ? saved.studentId : null,
+        monitorId: typeof saved.monitorId === "string" ? saved.monitorId : null,
         accent,
         theme,
         hydrated: true,
@@ -55,25 +94,29 @@ export const useUi = create<UiState>((set, get) => ({
     }
   },
 
-  setRole: (role) => {
-    set({ role });
-    const { accent, theme } = get();
-    safeStorage.set(KEY, JSON.stringify({ role, accent, theme }));
+  setIdentity: (role, personId) => {
+    const current = get();
+    set({
+      role,
+      studentId: role === "student" && personId !== undefined ? personId : current.studentId,
+      monitorId: role === "monitor" && personId !== undefined ? personId : current.monitorId,
+    });
+    save(snapshot(get()));
   },
 
   setAccent: (accent) => {
-    const { theme, role } = get();
-    apply(accent, theme);
+    apply(accent, get().theme);
     set({ accent });
-    safeStorage.set(KEY, JSON.stringify({ role, accent, theme }));
+    save(snapshot(get()));
   },
 
   setTheme: (theme) => {
-    const { accent, role } = get();
-    apply(accent, theme);
+    apply(get().accent, theme);
     set({ theme });
-    safeStorage.set(KEY, JSON.stringify({ role, accent, theme }));
+    save(snapshot(get()));
   },
 
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+
+  setSwitcherOpen: (switcherOpen) => set({ switcherOpen }),
 }));

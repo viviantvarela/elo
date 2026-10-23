@@ -84,6 +84,18 @@ export interface CreateRequestPayload {
   preferred: Slot[];
 }
 
+/** Quem pode estar usando o Elo (menu do usuário e troca de usuário). */
+export interface PeoplePayload {
+  coordinator: DemoProfile;
+  students: Student[];
+  monitors: Monitor[];
+  topics: Topic[];
+}
+
+export type ProfilePatch = Partial<Pick<DemoProfile, "name" | "email" | "className" | "campus">>;
+export type StudentPatch = Partial<Pick<Student, "name" | "className" | "course">>;
+export type MonitorPatch = Partial<Pick<Monitor, "name" | "className" | "bio" | "online" | "availability">>;
+
 export const api = {
   /* -------------------------------- painel ------------------------------- */
   getDashboard: () => request<DashboardSummary>("/api/dashboard"),
@@ -127,8 +139,15 @@ export const api = {
     notes?: string;
   }) => request<{ session: Session }>("/api/sessions", { method: "POST", body: JSON.stringify(payload) }),
 
+  /* ------------------------------- usuários ------------------------------ */
+  getPeople: () => request<PeoplePayload>("/api/people"),
+  updateStudent: (id: string, patch: StudentPatch) =>
+    request<Student>("/api/students", { method: "PATCH", body: JSON.stringify({ id, ...patch }) }),
+
   /* ------------------------------- monitores ----------------------------- */
   listMonitors: () => request<Monitor[]>("/api/monitors"),
+  updateMonitor: (id: string, patch: MonitorPatch) =>
+    request<Monitor>("/api/monitors", { method: "PATCH", body: JSON.stringify({ id, ...patch }) }),
 
   /* ------------------------------- relatórios ---------------------------- */
   getReports: () => request<ReportPayload>("/api/reports"),
@@ -137,7 +156,7 @@ export const api = {
   getSettings: () => request<SettingsPayload>("/api/settings"),
   saveSettings: (patch: Partial<Settings>) =>
     request<SettingsPayload>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
-  saveProfile: (patch: Partial<DemoProfile>) =>
+  saveProfile: (patch: ProfilePatch) =>
     request<DemoProfile>("/api/profile", { method: "PATCH", body: JSON.stringify(patch) }),
   resetDemo: () => request<{ ok: boolean }>("/api/admin/reset", { method: "POST" }),
 };

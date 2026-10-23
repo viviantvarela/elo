@@ -7,6 +7,7 @@
 import { PGlite } from "@electric-sql/pglite";
 
 import { createPostgresStore, type Queryable } from "../lib/server/store/postgres";
+import { LEGACY_PROFILE_EMAIL, LEGACY_PROFILE_NAME, migrate } from "../lib/server/migrate";
 import { getDashboard, getReports } from "../lib/server/repository";
 
 const client = new PGlite();
@@ -85,6 +86,26 @@ assert(resetted.requests.length === db.requests.length, "volta ao tamanho da sem
 
 const count = await client.query<{ count: string }>("select count(*)::text as count from elo_requests");
 assert(Number(count.rows[0].count) === resetted.requests.length, "tabela reflete o reset");
+
+console.log("\n6) perfil: semente em branco, base antiga é limpa, nome real é mantido");
+assert(resetted.profile.name === "" && resetted.profile.email === "", "semente não traz pessoa fictícia no perfil");
+
+await store.updateDb((draft) => {
+  draft.profile.name = LEGACY_PROFILE_NAME.toUpperCase();
+  draft.profile.email = LEGACY_PROFILE_EMAIL;
+  draft.profile.role = "student";
+  draft.profile.coordinatorView = false;
+});
+const legacy = migrate(await store.readDb());
+assert(legacy.profile.name === "" && legacy.profile.email === "", "nome e e-mail da semente antiga são apagados");
+assert(legacy.profile.role === "coordinator" && legacy.profile.coordinatorView, "perfil volta a ser a conta da coordenação");
+
+await store.updateDb((draft) => {
+  draft.profile.name = "Ana Souza";
+  draft.profile.email = "ana.souza@ifrn.edu.br";
+});
+const kept = migrate(await store.readDb());
+assert(kept.profile.name === "Ana Souza" && kept.profile.email === "ana.souza@ifrn.edu.br", "perfil preenchido sobrevive ao round-trip");
 
 await client.close();
 console.log("\nTodos os testes do driver Postgres passaram.\n");

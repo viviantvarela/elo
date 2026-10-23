@@ -1,22 +1,27 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Clock3, GraduationCap, Search, Star, Users } from "lucide-react";
+import { Clock3, GraduationCap, Search, Star, UserRoundPen, Users } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { PageHeader } from "@/components/page-header";
 import { Avatar, Button, Chip, Dialog, EmptyState, Panel, ProgressBar, Segmented, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
-import { weekdayShort } from "@/lib/constants";
-import type { Monitor } from "@/lib/types";
+import { monitorKindLabels, weekdayShort } from "@/lib/constants";
+import { useCurrentUser } from "@/lib/current-user";
 import { cn, formatSlot } from "@/lib/utils";
 
 export default function MonitoresPage() {
+  const { user } = useCurrentUser();
   const monitors = useQuery({ queryKey: ["monitors"], queryFn: api.listMonitors });
   const dashboard = useQuery({ queryKey: ["dashboard"], queryFn: api.getDashboard });
   const [query, setQuery] = useState("");
   const [topic, setTopic] = useState("all");
-  const [selected, setSelected] = useState<Monitor | null>(null);
+  // guarda só o id: o cartão aberto acompanha edições e registros feitos depois
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = monitors.data?.find((monitor) => monitor.id === selectedId) ?? null;
+  const isMe = (id: string) => user?.role === "monitor" && user.id === id;
 
   const topics = dashboard.data?.topics ?? [];
 
@@ -52,12 +57,15 @@ export default function MonitoresPage() {
             className="h-9 w-full rounded-full border border-line bg-surface-muted pl-8 pr-3 text-[12.5px] text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
           />
         </div>
-        <Segmented
-          size="sm"
-          value={topic}
-          onChange={setTopic}
-          options={[{ value: "all", label: "Todos os tópicos" }, ...topics.map((entry) => ({ value: entry.id, label: entry.name }))]}
-        />
+        <div className="-m-1 max-w-[calc(100%+0.5rem)] overflow-x-auto p-1">
+          <Segmented
+            size="sm"
+            className="w-max"
+            value={topic}
+            onChange={setTopic}
+            options={[{ value: "all", label: "Todos os tópicos" }, ...topics.map((entry) => ({ value: entry.id, label: entry.name }))]}
+          />
+        </div>
       </Panel>
 
       {monitors.isLoading ? (
@@ -77,19 +85,23 @@ export default function MonitoresPage() {
             return (
               <button
                 key={monitor.id}
-                onClick={() => setSelected(monitor)}
+                onClick={() => setSelectedId(monitor.id)}
                 style={{ animationDelay: `${index * 40}ms` }}
-                className="rise card-hover rounded-[20px] border border-line bg-surface p-4 text-left shadow-[var(--shadow-card)]"
+                className={cn(
+                  "rise card-hover rounded-[20px] border bg-surface p-4 text-left shadow-[var(--shadow-card)]",
+                  isMe(monitor.id) ? "border-accent/45 ring-1 ring-inset ring-accent/20" : "border-line",
+                )}
               >
                 <div className="flex items-start gap-3">
                   <Avatar name={monitor.name} color={monitor.color} size="md" />
                   <div className="min-w-0 flex-1">
                     <p className="flex items-center gap-1.5 truncate text-[13.5px] font-semibold text-ink">
-                      {monitor.name}
+                      <span className="truncate">{monitor.name}</span>
                       {monitor.online ? <span className="live-dot size-1.5 shrink-0 rounded-full bg-accent" /> : null}
+                      {isMe(monitor.id) ? <Chip tone="accent" className="shrink-0">você</Chip> : null}
                     </p>
                     <p className="truncate text-[11.5px] text-ink-soft">
-                      {monitor.className} · {monitor.kind === "bolsista" ? "bolsista" : "voluntário(a)"}
+                      {monitor.className} · {monitorKindLabels[monitor.kind]}
                     </p>
                   </div>
                   <span className="num flex shrink-0 items-center gap-1 text-[12px] font-medium text-ink">
@@ -146,9 +158,9 @@ export default function MonitoresPage() {
 
       <Dialog
         open={Boolean(selected)}
-        onClose={() => setSelected(null)}
+        onClose={() => setSelectedId(null)}
         title={selected?.name ?? "Monitor"}
-        description={selected ? `${selected.className} · ${selected.bio}` : undefined}
+        description={selected ? [selected.className, selected.bio].filter(Boolean).join(" · ") : undefined}
         width="max-w-lg"
       >
         {selected ? (
@@ -196,8 +208,8 @@ export default function MonitoresPage() {
 
             <div>
               <p className="label-xs mb-1.5">Disponibilidade</p>
-              <div className="grid grid-cols-5 gap-1.5">
-                {[1, 2, 3, 4, 5].map((day) => {
+              <div className={cn("grid gap-1.5", selected.availability.some((slot) => slot.day === 6) ? "grid-cols-6" : "grid-cols-5")}>
+                {(selected.availability.some((slot) => slot.day === 6) ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map((day) => {
                   const slots = selected.availability.filter((slot) => slot.day === day);
                   return (
                     <div key={day} className="rounded-[10px] border border-line p-1.5 text-center">
@@ -221,11 +233,19 @@ export default function MonitoresPage() {
               <Chip tone={selected.online ? "accent" : "neutral"}>
                 {selected.online ? "disponível agora" : "offline"}
               </Chip>
-              <Chip tone="neutral">{selected.kind === "bolsista" ? "bolsista" : "voluntário(a)"}</Chip>
+              <Chip tone="neutral">{monitorKindLabels[selected.kind]}</Chip>
             </div>
 
-            <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => setSelected(null)}>
+            <div className="flex flex-wrap justify-end gap-2">
+              {isMe(selected.id) ? (
+                <Link
+                  href="/configuracoes#perfil"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-medium text-ink transition-colors hover:bg-surface-muted"
+                >
+                  <UserRoundPen className="size-3.5" /> Editar meu perfil
+                </Link>
+              ) : null}
+              <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>
                 Fechar
               </Button>
             </div>

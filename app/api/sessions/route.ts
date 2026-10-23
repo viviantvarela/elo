@@ -1,4 +1,4 @@
-import { badRequest, notFound, ok, readJson, serverError } from "@/lib/server/http";
+import { badRequest, conflict, notFound, ok, readJson, serverError } from "@/lib/server/http";
 import { readDb, updateDb } from "@/lib/server/db";
 import { nextId } from "@/lib/server/repository";
 import type { Session } from "@/lib/types";
@@ -30,14 +30,31 @@ export async function GET() {
 export async function POST(request: Request) {
   const payload = await readJson<CompletePayload>(request);
   if (!payload?.requestId) return badRequest("Informe o pedido da sessão.");
-  if (!payload.minutes || payload.minutes <= 0) return badRequest("Informe a duração em minutos.");
+  const minutes = Math.round(Number(payload.minutes));
+  if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 240) {
+    return badRequest("Informe a duração em minutos (até 4 horas).");
+  }
+
+  const attendance = payload.attendance === "absent" ? "absent" : "present";
+  // só quem compareceu avalia; a nota é um inteiro de 1 a 5
+  const rating =
+    attendance === "present" && Number.isInteger(payload.rating) && (payload.rating as number) >= 1 && (payload.rating as number) <= 5
+      ? (payload.rating as number)
+      : undefined;
 
   try {
+    const current = await readDb();
+    const found = current.requests.find((item) => item.id === payload.requestId);
+    if (!found) return notFound("Pedido não encontrado.");
+    // registrar duas vezes somaria as horas em dobro no relatório do monitor
+    if (found.status === "done") return conflict("Este atendimento já foi registrado.");
+    if (found.status === "cancelled") return conflict("Pedido cancelado: reabra antes de registrar.");
+
     const out = { session: null as Session | null };
 
     const db = await updateDb((draft) => {
       const target = draft.requests.find((item) => item.id === payload.requestId);
-      if (!target || !target.monitorId) return;
+      if (!target || !target.monitorId || target.status === "done" || target.status === "cancelled") return;
 
       const existing = draft.sessions.find((item) => item.id === target.sessionId);
       const at = existing?.startsAt ?? new Date().toISOString();
@@ -49,9 +66,9 @@ export async function POST(request: Request) {
         studentId: target.studentId,
         topicId: target.topicId,
         startsAt: at,
-        minutes: payload.minutes,
-        attendance: payload.attendance,
-        rating: payload.rating,
+        minutes,
+        attendance,
+        rating,
         notes: payload.notes?.trim() || undefined,
       };
 
@@ -66,9 +83,15 @@ export async function POST(request: Request) {
       target.closedAt = new Date().toISOString();
 
       const monitor = draft.monitors.find((item) => item.id === target.monitorId);
-      if (monitor && payload.attendance === "present") {
-        monitor.weeklyHours = Math.round((monitor.weeklyHours + payload.minutes / 60) * 10) / 10;
+      if (monitor && attendance === "present") {
+        monitor.weeklyHours = Math.round((monitor.weeklyHours + minutes / 60) * 10) / 10;
         monitor.sessions += 1;
+        // a nota do atendimento entra na média do monitor
+        if (rating !== undefined) {
+          const total = monitor.rating * monitor.ratingCount + rating;
+          monitor.ratingCount += 1;
+          monitor.rating = Math.round((total / monitor.ratingCount) * 100) / 100;
+        }
       }
 
       out.session = record;
