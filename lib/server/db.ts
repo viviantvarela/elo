@@ -29,8 +29,8 @@ export function activeDriver(): DriverName {
   if (explicit === "json" || explicit === "postgres" || explicit === "supabase") {
     return explicit;
   }
-  if (process.env.DATABASE_URL) return "postgres";
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) return "supabase";
+  if (process.env.DATABASE_URL) return "postgres";
   return "json";
 }
 
@@ -133,11 +133,13 @@ export async function resetDb() {
     seed.profile = current.profile;
     const studentIds = new Set(seed.students.map((s) => s.id));
     const monitorIds = new Set(seed.monitors.map((m) => m.id));
+    const teacherIds = new Set(seed.teachers.map((t) => t.id));
     seed.accounts = current.accounts.filter(
       (acc) =>
         acc.role === "coordinator" ||
         (acc.role === "student" && acc.studentId && studentIds.has(acc.studentId)) ||
-        (acc.role === "monitor" && acc.monitorId && monitorIds.has(acc.monitorId)),
+        (acc.role === "monitor" && acc.monitorId && monitorIds.has(acc.monitorId)) ||
+        (acc.role === "teacher" && acc.teacherId && teacherIds.has(acc.teacherId)),
     );
   } catch {
     /* base vazia ou ilegível: segue só com a semente */
