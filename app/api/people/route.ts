@@ -1,16 +1,14 @@
-import { ok, serverError } from "@/lib/server/http";
+import { ok, serverError, unauthorized } from "@/lib/server/http";
+import { resolveActor } from "@/lib/server/auth";
 import { readDb } from "@/lib/server/db";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Quem pode estar usando o Elo: a conta da coordenação, os estudantes, os
- * monitores e os professores. Alimenta o menu do usuário e a troca de usuário
- * enquanto não há tela de login.
- */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const db = await readDb();
+    const actor = await resolveActor(request, db);
+    if (!actor) return unauthorized();
     return ok({
       coordinator: db.profile,
       students: db.students,

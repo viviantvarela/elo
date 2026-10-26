@@ -1,6 +1,7 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -25,31 +26,55 @@ export function NewRequestDialog({
   onClose: () => void;
   students: Student[];
   topics: Topic[];
-  /** para avisar quando o tópico ainda não tem monitor */
   monitors?: Monitor[];
-  /** estudante usando o Elo: o pedido é sempre dele */
   lockedStudent?: Student | null;
   defaultStudentId?: string;
   defaultTopicId?: string;
   onCreated?: (request: HelpRequest) => void;
 }) {
   const queryClient = useQueryClient();
+  const { data: settingsData } = useQuery({
+    queryKey: ["settings"],
+    queryFn: api.getSettings,
+    staleTime: 60_000,
+    enabled: open,
+  });
+
   const [studentId, setStudentId] = useState(lockedStudent?.id ?? defaultStudentId ?? students[0]?.id ?? "");
   const [topicId, setTopicId] = useState(defaultTopicId ?? topics[0]?.id ?? "");
   const [note, setNote] = useState("");
   const [urgency, setUrgency] = useState<Urgency>("normal");
   const [slots, setSlots] = useState<string[]>([]);
+  const [acceptConsent, setAcceptConsent] = useState(false);
 
-  // cada abertura começa limpa e com o estudante certo (inclusive após trocar de usuário)
+  const consentRequired = settingsData?.settings.consentRequired ?? true;
+  const guardianRequired = settingsData?.settings.guardianConsentRequired ?? true;
+
   useEffect(() => {
     if (!open) return;
-    setStudentId(lockedStudent?.id ?? defaultStudentId ?? students[0]?.id ?? "");
+    const chosenId = lockedStudent?.id ?? defaultStudentId ?? students[0]?.id ?? "";
+    setStudentId(chosenId);
     setTopicId(defaultTopicId ?? topics[0]?.id ?? "");
     setNote("");
     setUrgency("normal");
     setSlots([]);
-    // só ao abrir (as listas podem ser recarregadas com o diálogo aberto)
+    const chosenStudent = lockedStudent ?? students.find((s) => s.id === chosenId);
+    setAcceptConsent(Boolean(chosenStudent?.consentAcceptedAt));
   }, [open, lockedStudent?.id]);
+
+  const effectiveStudentId = lockedStudent?.id ?? studentId;
+  const selectedStudent =
+    lockedStudent ?? students.find((student) => student.id === effectiveStudentId) ?? null;
+
+  useEffect(() => {
+    if (selectedStudent?.consentAcceptedAt) {
+      setAcceptConsent(true);
+    }
+  }, [selectedStudent?.id, selectedStudent?.consentAcceptedAt]);
+
+  const missingGuardianConsent = Boolean(
+    guardianRequired && selectedStudent && !selectedStudent.guardianConsent,
+  );
 
   const mutation = useMutation({
     mutationFn: api.createRequest,
@@ -62,6 +87,7 @@ export function NewRequestDialog({
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       void queryClient.invalidateQueries({ queryKey: ["requests"] });
       void queryClient.invalidateQueries({ queryKey: ["reports"] });
+      void queryClient.invalidateQueries({ queryKey: ["people"] });
       onCreated?.(request);
       onClose();
     },
@@ -77,20 +103,37 @@ export function NewRequestDialog({
       .filter((slot) => slots.includes(slot.key))
       .map((slot) => ({ day: slot.day, start: slot.start, end: slot.end }));
 
-    if (!studentId || !topicId) {
+    if (!effectiveStudentId || !topicId) {
       toast.error("Selecione o estudante e o tópico.");
+      return;
+    }
+    if (missingGuardianConsent) {
+      toast.error("Este estudante ainda não possui autorização do responsável registrada.");
       return;
     }
     if (preferred.length === 0) {
       toast.error("Escolha ao menos um horário possível.");
       return;
     }
+    if (consentRequired && !acceptConsent) {
+      toast.error("Confirme o termo de consentimento LGPD antes de enviar o pedido.");
+      return;
+    }
 
-    mutation.mutate({ studentId: lockedStudent?.id ?? studentId, topicId, note, urgency, preferred });
+    mutation.mutate({
+      studentId: effectiveStudentId,
+      topicId,
+      note,
+      urgency,
+      preferred,
+      acceptConsent,
+    });
   }
 
   const uncovered =
-    monitors !== undefined && topicId !== "" && !monitors.some((monitor) => monitor.topics.some((entry) => entry.topicId === topicId));
+    monitors !== undefined &&
+    topicId !== "" &&
+    !monitors.some((monitor) => monitor.topics.some((entry) => entry.topicId === topicId));
 
   return (
     <Dialog
@@ -108,7 +151,7 @@ export function NewRequestDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancelar
           </Button>
-          <Button onClick={submit} disabled={mutation.isPending}>
+          <Button onClick={submit} disabled={mutation.isPending || missingGuardianConsent}>
             {mutation.isPending ? "Enviando…" : lockedStudent ? "Enviar pedido" : "Registrar pedido"}
           </Button>
         </>
@@ -132,6 +175,7 @@ export function NewRequestDialog({
                 {students.map((student) => (
                   <option key={student.id} value={student.id}>
                     {student.name} · {student.className}
+                    {!student.guardianConsent ? " (sem termo responsável)" : ""}
                   </option>
                 ))}
               </Select>
@@ -147,6 +191,17 @@ export function NewRequestDialog({
             </Select>
           </Field>
         </div>
+
+        {missingGuardianConsent ? (
+          <div className="flex items-start gap-2 rounded-[12px] bg-warn-soft px-3 py-2.5 text-[11.5px] leading-snug text-ink ring-1 ring-inset ring-warn/25">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warn" />
+            <span>
+              <strong>Autorização do responsável pendente (LGPD).</strong> A política atual exige o termo assinado antes do
+              primeiro atendimento. A coordenação pode liberar o cadastro em{" "}
+              <span className="font-medium">Configurações → Estudantes & LGPD</span>.
+            </span>
+          </div>
+        ) : null}
 
         {uncovered ? (
           <p className="rounded-[12px] bg-warn-soft px-3 py-2 text-[11.5px] leading-snug text-ink ring-1 ring-inset ring-warn/20">
@@ -204,15 +259,30 @@ export function NewRequestDialog({
         </Field>
 
         <div className="rounded-[12px] border border-line bg-surface-muted px-3 py-2.5">
-          <p className="flex items-start gap-2 text-[11.5px] leading-snug text-ink-soft">
-            <Chip tone="neutral" className="shrink-0">
-              LGPD
-            </Chip>
-            <span>
-              Só coletamos o necessário para o atendimento. Estudantes menores de 18 anos precisam de autorização do
-              responsável registrada no perfil.
-            </span>
-          </p>
+          {consentRequired ? (
+            <label className="flex cursor-pointer items-start gap-2.5 text-[11.5px] leading-snug text-ink-soft">
+              <input
+                type="checkbox"
+                checked={acceptConsent}
+                onChange={(event) => setAcceptConsent(event.target.checked)}
+                className="mt-0.5 accent-[var(--accent)]"
+              />
+              <span>
+                <Chip tone="neutral" className="mr-1.5 px-1.5 py-0 text-[10px]">
+                  LGPD
+                </Chip>
+                Autorizo o uso dos dados estritamente necessários (nome, turma, tópico e horários) para organizar o
+                pareamento e contabilizar horas de monitoria no IFRN.
+              </span>
+            </label>
+          ) : (
+            <p className="flex items-start gap-2 text-[11.5px] leading-snug text-ink-soft">
+              <Chip tone="neutral" className="shrink-0">
+                LGPD
+              </Chip>
+              <span>Só coletamos o necessário para o atendimento e geração de indicadores institucionais.</span>
+            </p>
+          )}
         </div>
       </div>
     </Dialog>

@@ -11,6 +11,8 @@
     "test:db:pg": "tsx --conditions=react-server scripts/test-e2e-pg.mts"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.118.0",
     "@tanstack/react-query": "^5.62.11",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",

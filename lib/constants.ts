@@ -1,6 +1,6 @@
 "use client";
 
-import type { PairingWeights, Role } from "./types";
+import type { PairingWeights, PastelKey, Role } from "./types";
 
 export const CAMPUS = "IFRN — Campus Parnamirim";
 
@@ -10,6 +10,22 @@ export const topicCatalog = [
   { id: "fis", name: "Física", component: "Física I", color: "blue" },
   { id: "prog", name: "Programação", component: "Lógica e Programação", color: "lilac" },
   { id: "quim", name: "Química", component: "Química I", color: "sand" },
+  { id: "hist", name: "História", component: "História I", color: "peach" },
+] as const;
+
+export const pastelOptions: { key: PastelKey; label: string }[] = [
+  { key: "sage", label: "Sálvia" },
+  { key: "peach", label: "Pêssego" },
+  { key: "blue", label: "Azul" },
+  { key: "lilac", label: "Lilás" },
+  { key: "sand", label: "Areia" },
+];
+
+export const locationPresets = [
+  "Biblioteca — Mesa de estudos",
+  "Lab de Informática 1",
+  "Sala de Monitoria",
+  "Google Meet (online)",
 ] as const;
 
 export const statusLabels: Record<string, string> = {

@@ -1,17 +1,43 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RotateCcw, Save, ShieldCheck, Sliders, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  BookPlus,
+  Plus,
+  RotateCcw,
+  Save,
+  Search,
+  ShieldCheck,
+  Sliders,
+  Sparkles,
+  Trash2,
+  UserPlus,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/page-header";
 import { ProfilePanel } from "@/components/profile/profile-panel";
-import { Button, Chip, Dialog, Panel, PanelHeader, ProgressBar, Segmented, Select, Skeleton } from "@/components/ui";
+import { NewTopicDialog } from "@/components/topics/new-topic-dialog";
+import {
+  Avatar,
+  Button,
+  Chip,
+  Dialog,
+  Field,
+  Input,
+  Panel,
+  PanelHeader,
+  ProgressBar,
+  Segmented,
+  Select,
+  Skeleton,
+  Switch,
+} from "@/components/ui";
 import { api } from "@/lib/api";
 import { accentOptions } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/current-user";
-import type { AccentKey, PairingWeights, Settings } from "@/lib/types";
+import type { AccentKey, PairingWeights, Settings, Student, Topic } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
@@ -30,25 +56,32 @@ const accentSwatch: Record<AccentKey, string> = {
   amber: "#986f16",
 };
 
-const privacyItems = [
+const privacyItems: {
+  key: "consentRequired" | "guardianConsentRequired" | "aggregateOnly";
+  title: string;
+  detail: string;
+}[] = [
   {
-    key: "consentRequired" as const,
+    key: "consentRequired",
     title: "Consentimento no primeiro acesso",
-    detail: "Termo aceito antes de registrar pedidos.",
+    detail: "Termo LGPD aceito antes de registrar pedidos.",
   },
   {
-    key: "guardianConsentRequired" as const,
+    key: "guardianConsentRequired",
     title: "Autorização de responsável",
-    detail: "Exigida para estudantes menores de 18 anos.",
+    detail: "Exigida para estudantes sem termo de responsável ativo.",
   },
   {
-    key: "aggregateOnly" as const,
-    title: "Painel apenas agregado",
-    detail: "Coordenação vê números, não desempenho individual.",
+    key: "aggregateOnly",
+    title: "Relatórios apenas agregados",
+    detail: "Anonimiza nomes individuais nas tabelas e exportação CSV.",
   },
 ];
 
-const retentionLabel = (days: number) => (days === 180 ? "180 dias" : days === 730 ? "2 anos" : days === 365 ? "1 ano" : `${days} dias`);
+const retentionLabel = (days: number) =>
+  days === 180 ? "180 dias" : days === 730 ? "2 anos" : days === 365 ? "1 ano" : `${days} dias`;
+
+const courses = ["Informática", "Mecatrônica", "Redes de Computadores", "Edificações"];
 
 export default function ConfiguracoesPage() {
   const queryClient = useQueryClient();
@@ -58,6 +91,9 @@ export default function ConfiguracoesPage() {
   const { data, isLoading } = useQuery({ queryKey: ["settings"], queryFn: api.getSettings });
   const [weights, setWeights] = useState<PairingWeights | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [topicOpen, setTopicOpen] = useState(false);
+  const [studentOpen, setStudentOpen] = useState(false);
+  const [studentQuery, setStudentQuery] = useState("");
 
   useEffect(() => {
     if (!data) return;
@@ -68,12 +104,34 @@ export default function ConfiguracoesPage() {
     mutationFn: (patch: Partial<Settings>) => api.saveSettings(patch),
     onSuccess: () => {
       toast.success("Preferências salvas.");
-      void queryClient.invalidateQueries({ queryKey: ["settings"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      void queryClient.invalidateQueries({ queryKey: ["requests"] });
-      void queryClient.invalidateQueries({ queryKey: ["request"] });
+      for (const key of ["settings", "dashboard", "requests", "request", "reports"]) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
+      }
     },
     onError: (error: Error) => toast.error(error.message),
+  });
+
+  const deleteTopic = useMutation({
+    mutationFn: (id: string) => api.deleteTopic(id),
+    onSuccess: () => {
+      toast.success("Tópico removido do catálogo.");
+      for (const key of ["topics", "people", "dashboard", "requests", "reports"]) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
+      }
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const toggleGuardian = useMutation({
+    mutationFn: ({ id, guardianConsent }: { id: string; guardianConsent: boolean }) =>
+      api.updateStudent(id, { guardianConsent }),
+    onSuccess: () => {
+      toast.success("Autorização atualizada.");
+      void queryClient.invalidateQueries({ queryKey: ["people"] });
+      void queryClient.invalidateQueries({ queryKey: ["students"] });
+      void queryClient.invalidateQueries({ queryKey: ["requests"] });
+    },
+    onError: (err: Error) => toast.error(err.message),
   });
 
   const resetDemo = useMutation({
@@ -85,6 +143,19 @@ export default function ConfiguracoesPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  const filteredStudents = useMemo(() => {
+    const list = people?.students ?? [];
+    const q = studentQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.className.toLowerCase().includes(q) ||
+        s.course.toLowerCase().includes(q) ||
+        (s.email ?? "").toLowerCase().includes(q),
+    );
+  }, [people?.students, studentQuery]);
 
   if (isLoading || !data || !weights || !user) {
     return (
@@ -98,6 +169,7 @@ export default function ConfiguracoesPage() {
     );
   }
 
+  const settings = data.settings;
   const sum = weights.topic + weights.availability + weights.rating + weights.load;
   const normalized = (value: number) => (sum > 0 ? value / sum : 0);
   const profile = <ProfilePanel user={user} topics={people?.topics ?? []} />;
@@ -109,7 +181,7 @@ export default function ConfiguracoesPage() {
         title="Configurações"
         subtitle={
           isCoordinator
-            ? "Seu perfil, os pesos do algoritmo, a aparência e as garantias de privacidade que sustentam o projeto."
+            ? "Seu perfil, pesos do algoritmo, catálogo curricular, estudantes e políticas LGPD."
             : "Seu perfil no Elo, a aparência do app e como os seus dados são tratados."
         }
         actions={
@@ -123,7 +195,6 @@ export default function ConfiguracoesPage() {
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
         {isCoordinator ? (
-          /* ------------------------------ pareamento ------------------------ */
           <Panel>
             <PanelHeader
               title="Pesos do pareamento"
@@ -177,11 +248,100 @@ export default function ConfiguracoesPage() {
 
       {isCoordinator ? (
         <>
+          {/* ------------------------ tópicos & estudantes ------------------- */}
+          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.25fr)]">
+            <Panel>
+              <PanelHeader
+                title="Catálogo de tópicos"
+                subtitle={`${people?.topics.length ?? 0} tópicos curriculares ativos.`}
+                action={
+                  <Button variant="outline" size="sm" onClick={() => setTopicOpen(true)}>
+                    <BookPlus className="size-3.5" /> Adicionar
+                  </Button>
+                }
+              />
+              <ul className="space-y-1.5 p-3">
+                {(people?.topics ?? []).map((t: Topic) => (
+                  <li
+                    key={t.id}
+                    className="flex items-center justify-between gap-2 rounded-[12px] border border-line px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-[12.5px] font-medium text-ink">{t.name}</p>
+                      <p className="truncate text-[11px] text-ink-soft">{t.component}</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-ink-faint hover:text-danger"
+                      aria-label={`Remover ${t.name}`}
+                      onClick={() => deleteTopic.mutate(t.id)}
+                      disabled={deleteTopic.isPending}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+
+            <Panel>
+              <PanelHeader
+                title="Estudantes & LGPD"
+                subtitle="Gerencie autorizações de responsáveis (menores de 18 anos) e cadastre discentes."
+                action={
+                  <Button variant="outline" size="sm" onClick={() => setStudentOpen(true)}>
+                    <UserPlus className="size-3.5" /> Novo estudante
+                  </Button>
+                }
+              />
+              <div className="p-3">
+                <div className="relative mb-2.5">
+                  <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint" />
+                  <input
+                    value={studentQuery}
+                    onChange={(e) => setStudentQuery(e.target.value)}
+                    placeholder="Buscar estudante por nome, turma ou e-mail…"
+                    className="h-9 w-full rounded-full border border-line bg-surface-muted pl-8 pr-3 text-[12.5px] text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+                  />
+                </div>
+                <ul className="max-h-[280px] space-y-1 overflow-y-auto pr-1">
+                  {filteredStudents.map((s: Student) => (
+                    <li
+                      key={s.id}
+                      className="flex items-center justify-between gap-3 rounded-[12px] border border-line px-2.5 py-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <Avatar name={s.name} color={s.color} size="xs" />
+                        <div className="min-w-0">
+                          <p className="truncate text-[12.5px] font-medium text-ink">{s.name}</p>
+                          <p className="truncate text-[10.5px] text-ink-soft">
+                            {[s.className, s.course, s.email].filter(Boolean).join(" · ")}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className={cn("text-[10.5px]", s.guardianConsent ? "text-accent-strong" : "text-warn")}>
+                          {s.guardianConsent ? "autorizado" : "pendente"}
+                        </span>
+                        <Switch
+                          checked={s.guardianConsent}
+                          onChange={(checked) => toggleGuardian.mutate({ id: s.id, guardianConsent: checked })}
+                          label={`Autorização do responsável de ${s.name}`}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Panel>
+          </div>
+
           {/* -------------------------------- LGPD ---------------------------- */}
           <Panel className="mt-3">
             <PanelHeader
               title="Privacidade e LGPD"
-              subtitle="Minimização, consentimento e autorização de responsáveis para menores de 18 anos."
+              subtitle="Minimização, consentimento e autorização de responsáveis aplicadas pelo servidor."
               action={
                 <Chip tone="accent">
                   <ShieldCheck className="size-3" /> em conformidade
@@ -190,7 +350,7 @@ export default function ConfiguracoesPage() {
             />
             <div className="grid gap-2 p-3 sm:grid-cols-2">
               {privacyItems.map((item) => {
-                const value = data.settings[item.key];
+                const value = settings[item.key];
                 return (
                   <button
                     key={item.key}
@@ -226,7 +386,7 @@ export default function ConfiguracoesPage() {
                   <p className="text-[11px] leading-snug text-ink-soft">Exclusão automática ao fim do período.</p>
                 </div>
                 <Select
-                  value={String(data.settings.retentionDays)}
+                  value={String(settings.retentionDays)}
                   onChange={(event) => saveSettings.mutate({ retentionDays: Number(event.target.value) })}
                   className="w-28"
                 >
@@ -241,16 +401,15 @@ export default function ConfiguracoesPage() {
           {/* ------------------------------- reset ---------------------------- */}
           <Panel className="mt-3">
             <PanelHeader
-              title="Ambiente de demonstração"
-              subtitle="Sem login por enquanto: cada navegador escolhe o usuário em “Trocar de usuário”, no menu do topo."
+              title="Base de demonstração do piloto"
+              subtitle="Restaura os 22 estudantes, 8 monitores, 33 pedidos e 37 sessões iniciais para apresentações."
             />
             <div className="flex flex-wrap items-center gap-3 p-5">
               <Button variant="danger" onClick={() => setConfirmReset(true)}>
                 <RotateCcw className="size-4" /> Restaurar dados de demonstração
               </Button>
               <p className="flex items-center gap-1.5 text-[11.5px] text-ink-soft">
-                <Sparkles className="size-3.5" /> Recria a semente: 22 estudantes, 8 monitores, 33 pedidos e o histórico
-                de sessões. Seu perfil é mantido.
+                <Sparkles className="size-3.5" /> Preserva seu perfil de coordenação (nome, e-mail e campus).
               </p>
             </div>
           </Panel>
@@ -259,7 +418,7 @@ export default function ConfiguracoesPage() {
             open={confirmReset}
             onClose={() => setConfirmReset(false)}
             title="Restaurar a base?"
-            description="Pedidos, sessões, estudantes, monitores e pesos voltam ao estado da semente. Seu perfil da coordenação (nome, e-mail e campus) é mantido."
+            description="Pedidos, sessões, estudantes, monitores e pesos voltam ao estado da semente. Seu perfil da coordenação é mantido."
             footer={
               <>
                 <Button variant="ghost" onClick={() => setConfirmReset(false)}>
@@ -275,15 +434,115 @@ export default function ConfiguracoesPage() {
               Útil antes de apresentar: a fila volta ao estado inicial e os indicadores ficam consistentes.
             </p>
           </Dialog>
+
+          <NewTopicDialog open={topicOpen} onClose={() => setTopicOpen(false)} />
+          <NewStudentDialog open={studentOpen} onClose={() => setStudentOpen(false)} />
         </>
       ) : null}
     </>
   );
 }
 
+function NewStudentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [className, setClassName] = useState("1º ano INFO");
+  const [course, setCourse] = useState("Informática");
+  const [guardianConsent, setGuardianConsent] = useState(true);
+
+  useEffect(() => {
+    if (!open) return;
+    setName("");
+    setEmail("");
+    setClassName("1º ano INFO");
+    setCourse("Informática");
+    setGuardianConsent(true);
+  }, [open]);
+
+  const mutation = useMutation({
+    mutationFn: api.createStudent,
+    onSuccess: (student) => {
+      toast.success(`Estudante ${student.name} cadastrado(a)!`);
+      for (const key of ["people", "students", "requests", "dashboard"]) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
+      }
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Cadastrar estudante"
+      description="Adicione um discente ao piloto. Se informar o e-mail institucional, o perfil será vinculado automaticamente no login."
+      width="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button
+            onClick={() => {
+              if (!name.trim()) {
+                toast.error("Informe o nome do estudante.");
+                return;
+              }
+              mutation.mutate({
+                name: name.trim(),
+                email: email.trim() || undefined,
+                className: className.trim(),
+                course,
+                guardianConsent,
+              });
+            }}
+            disabled={mutation.isPending}
+          >
+            <Plus className="size-4" /> {mutation.isPending ? "Cadastrando…" : "Cadastrar"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Field label="Nome completo">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Mariana Costa" maxLength={80} />
+        </Field>
+        <Field label="E-mail institucional (opcional)">
+          <Input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="mariana@escolar.ifrn.edu.br"
+            maxLength={120}
+          />
+        </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Turma">
+            <Input value={className} onChange={(e) => setClassName(e.target.value)} placeholder="1º ano INFO" maxLength={60} />
+          </Field>
+          <Field label="Curso">
+            <Select value={course} onChange={(e) => setCourse(e.target.value)}>
+              {courses.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <div className="flex items-center justify-between rounded-[12px] border border-line bg-surface-muted/60 px-3 py-2.5">
+          <span className="text-[12px] text-ink">Termo do responsável entregue / maior de 18 anos</span>
+          <Switch checked={guardianConsent} onChange={setGuardianConsent} label="Autorização do responsável" />
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 /* -------------------------------- aparência -------------------------------- */
 
-/** Preferência de quem usa este navegador — não altera nada para os outros usuários. */
 function AppearancePanel() {
   const accent = useUi((state) => state.accent);
   const setAccent = useUi((state) => state.setAccent);

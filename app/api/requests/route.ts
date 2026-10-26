@@ -1,19 +1,39 @@
-import { badRequest, conflict, notFound, ok, readJson, searchParam, serverError } from "@/lib/server/http";
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+  ok,
+  readJson,
+  searchParam,
+  serverError,
+  unauthorized,
+} from "@/lib/server/http";
+import { resolveActor } from "@/lib/server/auth";
 import { readDb, updateDb } from "@/lib/server/db";
-import { findRequest, listRequests, matchesFor, nextId } from "@/lib/server/repository";
-import { cleanParagraph, sanitizeSlots } from "@/lib/server/validate";
+import {
+  findRequest,
+  listRequests,
+  matchesFor,
+  nextId,
+  revertCompletedSessionFromMonitor,
+} from "@/lib/server/repository";
+import { cleanParagraph, cleanText, sanitizeSlots } from "@/lib/server/validate";
 import type { HelpRequest, Session, Slot, Urgency } from "@/lib/types";
 
 const urgencies: Urgency[] = ["low", "normal", "high"];
 
-type Action = NonNullable<PatchPayload["action"]>;
+type Action = "match" | "schedule" | "cancel" | "reopen";
 
 /** Em que estados cada ação faz sentido — evita sessão duplicada, pedido concluído cancelado etc. */
 const transitions: Record<Action, { from: HelpRequest["status"][]; message: string }> = {
   match: { from: ["open", "matched"], message: "Este pedido já foi agendado ou encerrado." },
-  schedule: { from: ["open", "matched"], message: "Este pedido já foi agendado ou encerrado." },
-  cancel: { from: ["open", "matched"], message: "Só dá para cancelar pedidos que ainda não foram agendados." },
-  reopen: { from: ["matched", "cancelled", "done"], message: "Este pedido não pode voltar para a fila agora." },
+  schedule: { from: ["open", "matched", "scheduled"], message: "Este pedido já foi encerrado." },
+  cancel: { from: ["open", "matched", "scheduled"], message: "Só dá para cancelar pedidos ainda não concluídos." },
+  reopen: {
+    from: ["matched", "scheduled", "cancelled", "done"],
+    message: "Este pedido já está aberto na fila.",
+  },
 };
 
 export const dynamic = "force-dynamic";
@@ -24,20 +44,24 @@ interface CreatePayload {
   note: string;
   urgency: Urgency;
   preferred: Slot[];
+  acceptConsent?: boolean;
 }
 
 interface PatchPayload {
   id: string;
-  action?: "match" | "schedule" | "cancel" | "reopen";
+  action?: Action;
   monitorId?: string;
   startsAt?: string;
   minutes?: number;
-  patch?: Partial<HelpRequest>;
+  location?: string;
 }
 
 export async function GET(request: Request) {
   try {
     const db = await readDb();
+    const actor = await resolveActor(request, db);
+    if (!actor) return unauthorized();
+
     const id = searchParam(request, "id");
 
     if (id) {
@@ -59,6 +83,11 @@ export async function GET(request: Request) {
       topics: db.topics,
       monitors: db.monitors,
       weights: db.settings.weights,
+      privacy: {
+        consentRequired: db.settings.consentRequired,
+        guardianConsentRequired: db.settings.guardianConsentRequired,
+        aggregateOnly: db.settings.aggregateOnly,
+      },
     });
   } catch {
     return serverError("Não foi possível carregar os pedidos.");
@@ -79,16 +108,42 @@ export async function POST(request: Request) {
 
   try {
     const current = await readDb();
-    if (!current.students.some((student) => student.id === payload.studentId)) {
+    const actor = await resolveActor(request, current);
+    if (!actor) return unauthorized();
+
+    if (actor.role === "monitor") {
+      return forbidden("Monitores atendem pedidos; para pedir ajuda, entre como estudante.");
+    }
+    if (actor.role === "student" && actor.studentId !== payload.studentId) {
+      return forbidden("Você só pode abrir pedidos em seu próprio nome.");
+    }
+
+    const student = current.students.find((entry) => entry.id === payload.studentId);
+    if (!student) {
       return badRequest("Estudante não encontrado. Atualize a página e tente de novo.");
     }
     if (!current.topics.some((topic) => topic.id === payload.topicId)) {
       return badRequest("Tópico não encontrado.");
     }
 
+    // Regras reais de LGPD configuradas pela coordenação
+    if (current.settings.guardianConsentRequired && !student.guardianConsent) {
+      return forbidden(
+        "Autorização do responsável pendente (LGPD). Peça à coordenação para registrar a autorização no seu cadastro.",
+      );
+    }
+    if (actor.role === "student" && current.settings.consentRequired && !student.consentAcceptedAt && !payload.acceptConsent) {
+      return conflict("Confirme o termo de uso de dados (LGPD) antes de enviar seu primeiro pedido.");
+    }
+
     const out = { id: "" };
 
     const db = await updateDb((draft) => {
+      const targetStudent = draft.students.find((s) => s.id === payload.studentId);
+      if (targetStudent && payload.acceptConsent && !targetStudent.consentAcceptedAt) {
+        targetStudent.consentAcceptedAt = new Date().toISOString();
+      }
+
       const created: HelpRequest = {
         id: nextId("r", draft.requests),
         studentId: payload.studentId,
@@ -115,6 +170,10 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const payload = await readJson<PatchPayload>(request);
   if (!payload?.id) return badRequest("Informe o pedido que deseja atualizar.");
+  if (!payload.action) return badRequest("Informe a ação que deseja executar no pedido.");
+
+  const rule = transitions[payload.action];
+  if (!rule) return badRequest("Ação desconhecida.");
 
   if (payload.action === "match" && !payload.monitorId) return badRequest("Escolha o monitor do pedido.");
   if (payload.action === "schedule") {
@@ -126,15 +185,55 @@ export async function PATCH(request: Request) {
     }
   }
 
+  const location = payload.location !== undefined ? cleanText(payload.location, 160) : undefined;
+
   try {
     const current = await readDb();
+    const actor = await resolveActor(request, current);
+    if (!actor) return unauthorized();
+
     const existing = current.requests.find((item) => item.id === payload.id);
     if (!existing) return notFound("Pedido não encontrado.");
+    if (!rule.from.includes(existing.status)) return conflict(rule.message);
 
-    if (payload.action) {
-      const rule = transitions[payload.action];
-      if (!rule) return badRequest("Ação desconhecida.");
-      if (!rule.from.includes(existing.status)) return conflict(rule.message);
+    const isCoordinator = actor.role === "coordinator";
+    const isOwner = actor.role === "student" && actor.studentId === existing.studentId;
+    const isAssignedMonitor = actor.role === "monitor" && Boolean(existing.monitorId) && actor.monitorId === existing.monitorId;
+
+    // Verificação de permissões por papel no servidor
+    if (payload.action === "match") {
+      if (actor.role === "monitor") {
+        if (existing.status !== "open") return conflict("Este pedido já foi assumido por outro monitor.");
+        if (payload.monitorId !== actor.monitorId) {
+          return forbidden("Você só pode aceitar pedidos em seu próprio nome.");
+        }
+        const me = current.monitors.find((m) => m.id === actor.monitorId);
+        if (!me?.topics.some((t) => t.topicId === existing.topicId)) {
+          return forbidden("Este pedido é de um tópico fora da sua área de monitoria.");
+        }
+      } else if (!isCoordinator) {
+        return forbidden("Apenas monitores ou a coordenação podem parear pedidos.");
+      }
+    }
+
+    if (payload.action === "schedule" && !isCoordinator && !isAssignedMonitor) {
+      return forbidden("Apenas o monitor responsável ou a coordenação podem agendar o atendimento.");
+    }
+
+    if (payload.action === "cancel" && !isCoordinator && !isOwner) {
+      return forbidden("Apenas o estudante autor ou a coordenação podem cancelar o pedido.");
+    }
+
+    if (payload.action === "reopen") {
+      if (existing.status === "done" && !isCoordinator) {
+        return forbidden("Apenas a coordenação pode reabrir um pedido já concluído.");
+      }
+      if ((existing.status === "matched" || existing.status === "scheduled") && !isCoordinator && !isAssignedMonitor) {
+        return forbidden("Apenas o monitor responsável ou a coordenação podem devolver o pedido à fila.");
+      }
+      if (existing.status === "cancelled" && !isCoordinator && !isOwner) {
+        return forbidden("Apenas o estudante autor ou a coordenação podem reabrir este pedido.");
+      }
     }
 
     const monitorId = payload.monitorId ?? (payload.action === "schedule" ? existing.monitorId : undefined);
@@ -146,11 +245,7 @@ export async function PATCH(request: Request) {
 
     const db = await updateDb((draft) => {
       const target = draft.requests.find((item) => item.id === payload.id);
-      if (!target) return;
-
-      if (payload.patch && !payload.action) {
-        Object.assign(target, payload.patch);
-      }
+      if (!target || !rule.from.includes(target.status)) return;
 
       if (payload.action === "match") {
         if (!payload.monitorId) return;
@@ -164,28 +259,53 @@ export async function PATCH(request: Request) {
         if (payload.monitorId) target.monitorId = payload.monitorId;
         if (!target.matchedAt) target.matchedAt = new Date().toISOString();
 
-        const session: Session = {
-          id: nextId("s", draft.sessions),
-          requestId: target.id,
-          monitorId: target.monitorId ?? "",
-          studentId: target.studentId,
-          topicId: target.topicId,
-          startsAt: payload.startsAt,
-          minutes: payload.minutes ?? 60,
-          attendance: "present",
-        };
-        draft.sessions.push(session);
-        target.sessionId = session.id;
+        const existingSession = target.sessionId
+          ? draft.sessions.find((s) => s.id === target.sessionId)
+          : undefined;
+
+        if (existingSession) {
+          existingSession.monitorId = target.monitorId ?? existingSession.monitorId;
+          existingSession.startsAt = payload.startsAt;
+          existingSession.minutes = payload.minutes ?? existingSession.minutes;
+          if (location !== undefined) existingSession.location = location || undefined;
+          out.session = existingSession;
+        } else {
+          const session: Session = {
+            id: nextId("s", draft.sessions),
+            requestId: target.id,
+            monitorId: target.monitorId ?? "",
+            studentId: target.studentId,
+            topicId: target.topicId,
+            startsAt: payload.startsAt,
+            minutes: payload.minutes ?? 60,
+            attendance: "present",
+            location: location || undefined,
+          };
+          draft.sessions.push(session);
+          target.sessionId = session.id;
+          out.session = session;
+        }
         target.status = "scheduled";
-        out.session = session;
       }
 
       if (payload.action === "cancel") {
+        if (target.sessionId && target.status !== "done") {
+          draft.sessions = draft.sessions.filter((s) => s.id !== target.sessionId);
+          target.sessionId = undefined;
+        }
         target.status = "cancelled";
         target.closedAt = new Date().toISOString();
       }
 
       if (payload.action === "reopen") {
+        if (target.sessionId) {
+          const oldSession = draft.sessions.find((s) => s.id === target.sessionId);
+          if (oldSession && target.status === "done") {
+            const monitor = draft.monitors.find((m) => m.id === oldSession.monitorId);
+            if (monitor) revertCompletedSessionFromMonitor(monitor, oldSession);
+          }
+          draft.sessions = draft.sessions.filter((s) => s.id !== target.sessionId);
+        }
         target.status = "open";
         target.monitorId = undefined;
         target.matchedAt = undefined;

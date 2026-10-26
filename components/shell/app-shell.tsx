@@ -1,15 +1,17 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   BarChart3,
   CalendarDays,
   ChevronDown,
   Command,
+  KeyRound,
   LayoutDashboard,
   LifeBuoy,
   Lock,
+  LogOut,
   Menu,
   MessagesSquare,
   Moon,
@@ -24,12 +26,14 @@ import {
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { SwitchUserDialog } from "@/components/shell/switch-user-dialog";
-import { Avatar, Button, Dialog, EmptyState, Panel, Skeleton } from "@/components/ui";
+import { Avatar, Button, Chip, Dialog, EmptyState, Panel, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
 import { canAccess, firstAccessibleHref, navItems, roleLabels } from "@/lib/constants";
 import { useCurrentUser, visibleRequests } from "@/lib/current-user";
+import { getSupabaseBrowserClient, isDemoModeEnabled } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
@@ -67,18 +71,22 @@ export function Logo({ compact = false }: { compact?: boolean }) {
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
-  const { user } = useCurrentUser();
+  const { user, signedOut } = useCurrentUser();
   const role = user?.role ?? "coordinator";
 
   const { data } = useQuery({
     queryKey: ["dashboard"],
     queryFn: api.getDashboard,
     staleTime: 30_000,
+    enabled: Boolean(user) && !signedOut,
   });
-  const requests = useQuery({ queryKey: ["requests"], queryFn: api.listRequests, staleTime: 30_000 });
+  const requests = useQuery({
+    queryKey: ["requests"],
+    queryFn: api.listRequests,
+    staleTime: 30_000,
+    enabled: Boolean(user) && !signedOut,
+  });
 
-  // contador de abertos do ponto de vista de quem está usando: os próprios
-  // pedidos (estudante), os do seu tópico (monitor) ou a fila toda (coordenação)
   const openCount =
     role === "coordinator"
       ? data?.stats.open ?? 0
@@ -136,7 +144,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           </p>
         </div>
         <p className="px-1 text-[10.5px] leading-snug text-ink-faint">
-          Dados de demonstração. Sem login por enquanto: troque de usuário no menu do topo.
+          {user?.authMode === "supabase"
+            ? `Autenticado como ${user.email ?? user.displayName}.`
+            : "Modo demonstração ativo. Troque de papel ou entre com conta IFRN no menu do topo."}
         </p>
       </div>
     </div>
@@ -146,9 +156,13 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 /* -------------------------------- user menu -------------------------------- */
 
 function UserMenu() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const { user, isLoading } = useCurrentUser();
   const setSwitcherOpen = useUi((state) => state.setSwitcherOpen);
+  const signOutState = useUi((state) => state.signOutState);
   const [open, setOpen] = useState(false);
+  const demoAllowed = isDemoModeEnabled();
 
   useEffect(() => {
     if (!open) return;
@@ -163,6 +177,18 @@ function UserMenu() {
       window.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  const handleSignOut = async () => {
+    setOpen(false);
+    const sb = getSupabaseBrowserClient();
+    if (sb) {
+      await sb.auth.signOut().catch(() => undefined);
+    }
+    signOutState();
+    queryClient.clear();
+    toast.success("Você saiu da conta.");
+    router.push("/entrar");
+  };
 
   if (isLoading || !user) {
     return (
@@ -206,16 +232,21 @@ function UserMenu() {
           role="menu"
           aria-label="Usuário"
           onClick={(event) => event.stopPropagation()}
-          className="absolute right-0 top-[calc(100%+8px)] z-40 w-[288px] overflow-hidden rounded-[16px] border border-line bg-surface p-1.5 shadow-[0_24px_60px_-30px_rgba(4,21,13,0.5)]"
+          className="absolute right-0 top-[calc(100%+8px)] z-40 w-[296px] overflow-hidden rounded-[16px] border border-line bg-surface p-1.5 shadow-[0_24px_60px_-30px_rgba(4,21,13,0.5)]"
         >
           <div className="flex items-center gap-3 px-2 pb-2.5 pt-2">
             <Avatar name={user.displayName} color={user.color} size="md" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-semibold text-ink">{user.displayName}</p>
               <p className="truncate text-[11.5px] text-ink-soft">{user.detail}</p>
-              <p className="mt-0.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-accent-strong">
-                {user.roleLabel}
-              </p>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-accent-strong">
+                  {user.roleLabel}
+                </span>
+                <Chip tone={user.authMode === "supabase" ? "accent" : "neutral"} className="px-1.5 py-0 text-[9.5px]">
+                  {user.authMode === "supabase" ? "autenticado" : "demo"}
+                </Chip>
+              </div>
             </div>
           </div>
 
@@ -237,21 +268,27 @@ function UserMenu() {
             <Link role="menuitem" href="/configuracoes#perfil" onClick={() => setOpen(false)} className={itemClass}>
               <UserRound className="size-4 text-ink-faint" /> Meu perfil
             </Link>
-            <button
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                setSwitcherOpen(true);
-              }}
-              className={itemClass}
-            >
-              <ArrowLeftRight className="size-4 text-ink-faint" /> Trocar de usuário
+            {demoAllowed && user.authMode === "demo" ? (
+              <>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    setSwitcherOpen(true);
+                  }}
+                  className={itemClass}
+                >
+                  <ArrowLeftRight className="size-4 text-ink-faint" /> Trocar de usuário (demo)
+                </button>
+                <Link role="menuitem" href="/entrar" onClick={() => setOpen(false)} className={itemClass}>
+                  <KeyRound className="size-4 text-ink-faint" /> Login institucional (Supabase)
+                </Link>
+              </>
+            ) : null}
+            <button role="menuitem" onClick={() => void handleSignOut()} className={cn(itemClass, "text-danger")}>
+              <LogOut className="size-4 text-danger" /> Sair
             </button>
           </div>
-
-          <p className="px-2 pb-1 pt-2 text-[10.5px] leading-snug text-ink-faint">
-            Sem login por enquanto: a escolha de usuário fica salva neste navegador.
-          </p>
         </div>
       ) : null}
     </div>
@@ -266,6 +303,7 @@ function CommandMenu({ open, onClose }: { open: boolean; onClose: () => void }) 
   const role = user?.role ?? "coordinator";
   const setSwitcherOpen = useUi((state) => state.setSwitcherOpen);
   const router = useRouter();
+  const demoAllowed = isDemoModeEnabled();
 
   const items = navItems
     .filter((item) => (item.roles as readonly string[]).includes(role))
@@ -278,11 +316,21 @@ function CommandMenu({ open, onClose }: { open: boolean; onClose: () => void }) 
       icon: UserRound,
       run: () => router.push("/configuracoes#perfil"),
     },
+    ...(demoAllowed && user?.authMode === "demo"
+      ? [
+          {
+            key: "switch",
+            label: "Trocar de usuário",
+            icon: ArrowLeftRight,
+            run: () => setSwitcherOpen(true),
+          },
+        ]
+      : []),
     {
-      key: "switch",
-      label: "Trocar de usuário",
-      icon: ArrowLeftRight,
-      run: () => setSwitcherOpen(true),
+      key: "login",
+      label: "Tela de login institucional",
+      icon: KeyRound,
+      run: () => router.push("/entrar"),
     },
   ].filter((action) => action.label.toLowerCase().includes(query.toLowerCase()));
 
@@ -395,7 +443,7 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
 /* -------------------------------- app shell ------------------------------- */
 
 /** Página fora do papel atual (ex.: estudante abrindo Relatórios pela URL). */
-function NoAccess({ role, roleLabel }: { role: Role; roleLabel: string }) {
+function NoAccess({ role, roleLabel, isDemo }: { role: Role; roleLabel: string; isDemo: boolean }) {
   const setSwitcherOpen = useUi((state) => state.setSwitcherOpen);
   const home = firstAccessibleHref(role);
   return (
@@ -403,7 +451,7 @@ function NoAccess({ role, roleLabel }: { role: Role; roleLabel: string }) {
       <EmptyState
         icon={<Lock className="size-6" />}
         title="Esta página não faz parte do seu perfil"
-        detail={`Você está usando o Elo como ${roleLabel}. Volte para a sua área ou troque de usuário para ver esta página.`}
+        detail={`Você está usando o Elo como ${roleLabel}. Volte para a sua área${isDemo ? " ou troque de usuário para ver esta página" : ""}.`}
         action={
           <div className="flex flex-wrap justify-center gap-2">
             <Link
@@ -412,9 +460,11 @@ function NoAccess({ role, roleLabel }: { role: Role; roleLabel: string }) {
             >
               Ir para a minha área
             </Link>
-            <Button variant="outline" onClick={() => setSwitcherOpen(true)}>
-              <ArrowLeftRight className="size-4" /> Trocar de usuário
-            </Button>
+            {isDemo ? (
+              <Button variant="outline" onClick={() => setSwitcherOpen(true)}>
+                <ArrowLeftRight className="size-4" /> Trocar de usuário
+              </Button>
+            ) : null}
           </div>
         }
       />
@@ -440,9 +490,20 @@ function PageSkeleton() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const sidebarOpen = useUi((state) => state.sidebarOpen);
   const setSidebarOpen = useUi((state) => state.setSidebarOpen);
-  const { user, isLoading, isError, retry } = useCurrentUser();
+  const { user, signedOut, isLoading, isError, retry } = useCurrentUser();
+
+  useEffect(() => {
+    if (signedOut) {
+      router.replace("/entrar");
+    }
+  }, [signedOut, router]);
+
+  if (signedOut) {
+    return null;
+  }
 
   return (
     <div className="min-h-dvh bg-canvas p-2 sm:p-3 lg:p-4">
@@ -474,16 +535,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar onOpenMenu={() => setSidebarOpen(true)} />
           <main key={pathname} className="page-enter flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
-            {/* as telas dependem de quem está usando: espera a identidade antes de renderizar */}
             {isError ? (
               <Panel>
                 <EmptyState
                   title="Não foi possível carregar o seu usuário"
-                  detail="Confira a conexão e tente de novo. Se persistir, veja /api/health."
+                  detail="Confira sua sessão ou faça login novamente."
                   action={
-                    <Button variant="outline" onClick={() => void retry()}>
-                      Tentar de novo
-                    </Button>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <Button variant="outline" onClick={() => void retry()}>
+                        Tentar de novo
+                      </Button>
+                      <Link
+                        href="/entrar"
+                        className="inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-[12.5px] font-medium text-white hover:bg-accent-strong"
+                      >
+                        Ir para login
+                      </Link>
+                    </div>
                   }
                 />
               </Panel>
@@ -492,7 +560,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ) : canAccess(pathname, user.role) ? (
               children
             ) : (
-              <NoAccess role={user.role} roleLabel={roleLabels[user.role]} />
+              <NoAccess
+                role={user.role}
+                roleLabel={roleLabels[user.role]}
+                isDemo={user.authMode === "demo" && isDemoModeEnabled()}
+              />
             )}
           </main>
         </div>

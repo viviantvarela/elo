@@ -1,29 +1,67 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { Clock3, GraduationCap, Search, Star, UserRoundPen, Users } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  BookPlus,
+  Clock3,
+  GraduationCap,
+  Pencil,
+  Plus,
+  Search,
+  Star,
+  Trash2,
+  UserRoundPen,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import { PageHeader } from "@/components/page-header";
-import { Avatar, Button, Chip, Dialog, EmptyState, Panel, ProgressBar, Segmented, Skeleton } from "@/components/ui";
-import { api } from "@/lib/api";
-import { monitorKindLabels, weekdayShort } from "@/lib/constants";
+import { NewTopicDialog } from "@/components/topics/new-topic-dialog";
+import {
+  Avatar,
+  Button,
+  Chip,
+  Dialog,
+  EmptyState,
+  Field,
+  Input,
+  Panel,
+  ProgressBar,
+  Segmented,
+  Select,
+  Skeleton,
+  Switch,
+  Textarea,
+} from "@/components/ui";
+import { api, type MonitorPatch } from "@/lib/api";
+import { monitorKindLabels, pilotSlots, weekdayShort } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/current-user";
+import type { Monitor, MonitorKind, Slot, Topic } from "@/lib/types";
 import { cn, formatSlot } from "@/lib/utils";
 
+type TopicSkill = Monitor["topics"][number];
+
 export default function MonitoresPage() {
+  const queryClient = useQueryClient();
   const { user } = useCurrentUser();
   const monitors = useQuery({ queryKey: ["monitors"], queryFn: api.listMonitors });
-  const dashboard = useQuery({ queryKey: ["dashboard"], queryFn: api.getDashboard });
+  const topicsQuery = useQuery({ queryKey: ["topics"], queryFn: api.listTopics });
   const [query, setQuery] = useState("");
   const [topic, setTopic] = useState("all");
-  // guarda só o id: o cartão aberto acompanha edições e registros feitos depois
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editorState, setEditorState] = useState<{ open: boolean; monitor: Monitor | null }>({
+    open: false,
+    monitor: null,
+  });
+  const [topicOpen, setTopicOpen] = useState(false);
+
   const selected = monitors.data?.find((monitor) => monitor.id === selectedId) ?? null;
   const isMe = (id: string) => user?.role === "monitor" && user.id === id;
+  const isCoordinator = user?.role === "coordinator";
 
-  const topics = dashboard.data?.topics ?? [];
+  const topics = topicsQuery.data ?? [];
 
   const filtered = useMemo(() => {
     const list = monitors.data ?? [];
@@ -39,12 +77,36 @@ export default function MonitoresPage() {
     });
   }, [monitors.data, query, topic, topics]);
 
+  const deleteMutation = useMutation({
+    mutationFn: api.deleteMonitor,
+    onSuccess: () => {
+      setSelectedId(null);
+      toast.success("Monitor removido.");
+      for (const key of ["monitors", "people", "dashboard", "reports", "requests"]) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
+      }
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   return (
     <>
       <PageHeader
         eyebrow={`${monitors.data?.length ?? 0} pessoas no piloto`}
         title="Monitores e colegas apoiadores"
         subtitle="Quem domina cada tópico, quando pode atender e quanta agenda já está comprometida."
+        actions={
+          isCoordinator ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" onClick={() => setTopicOpen(true)}>
+                <BookPlus className="size-4" /> Novo tópico
+              </Button>
+              <Button onClick={() => setEditorState({ open: true, monitor: null })}>
+                <Plus className="size-4" /> Novo monitor
+              </Button>
+            </div>
+          ) : null
+        }
       />
 
       <Panel className="mb-3 flex flex-wrap items-center gap-2 p-3">
@@ -63,7 +125,10 @@ export default function MonitoresPage() {
             className="w-max"
             value={topic}
             onChange={setTopic}
-            options={[{ value: "all", label: "Todos os tópicos" }, ...topics.map((entry) => ({ value: entry.id, label: entry.name }))]}
+            options={[
+              { value: "all", label: "Todos os tópicos" },
+              ...topics.map((entry) => ({ value: entry.id, label: entry.name })),
+            ]}
           />
         </div>
       </Panel>
@@ -76,7 +141,22 @@ export default function MonitoresPage() {
         </div>
       ) : filtered.length === 0 ? (
         <Panel>
-          <EmptyState icon={<Users className="size-6" />} title="Nenhum monitor neste filtro" detail="Tente outro tópico." />
+          <EmptyState
+            icon={<Users className="size-6" />}
+            title="Nenhum monitor neste filtro"
+            detail={
+              isCoordinator
+                ? "Tente outro tópico ou cadastre um novo monitor para cobrir esta demanda."
+                : "Tente outro tópico."
+            }
+            action={
+              isCoordinator ? (
+                <Button onClick={() => setEditorState({ open: true, monitor: null })}>
+                  <Plus className="size-4" /> Cadastrar monitor
+                </Button>
+              ) : undefined
+            }
+          />
         </Panel>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -98,7 +178,11 @@ export default function MonitoresPage() {
                     <p className="flex items-center gap-1.5 truncate text-[13.5px] font-semibold text-ink">
                       <span className="truncate">{monitor.name}</span>
                       {monitor.online ? <span className="live-dot size-1.5 shrink-0 rounded-full bg-accent" /> : null}
-                      {isMe(monitor.id) ? <Chip tone="accent" className="shrink-0">você</Chip> : null}
+                      {isMe(monitor.id) ? (
+                        <Chip tone="accent" className="shrink-0">
+                          você
+                        </Chip>
+                      ) : null}
                     </p>
                     <p className="truncate text-[11.5px] text-ink-soft">
                       {monitor.className} · {monitorKindLabels[monitor.kind]}
@@ -160,7 +244,7 @@ export default function MonitoresPage() {
         open={Boolean(selected)}
         onClose={() => setSelectedId(null)}
         title={selected?.name ?? "Monitor"}
-        description={selected ? [selected.className, selected.bio].filter(Boolean).join(" · ") : undefined}
+        description={selected ? [selected.className, selected.email, selected.bio].filter(Boolean).join(" · ") : undefined}
         width="max-w-lg"
       >
         {selected ? (
@@ -190,7 +274,7 @@ export default function MonitoresPage() {
                   const info = topics.find((item) => item.id === entry.topicId);
                   return (
                     <div key={entry.topicId} className="flex items-center gap-2">
-                      <span className="w-32 truncate text-[12.5px] text-ink">{info?.name ?? entry.topicId}</span>
+                      <span className="w-36 truncate text-[12.5px] text-ink">{info?.name ?? entry.topicId}</span>
                       <div className="flex flex-1 items-center gap-1">
                         {[1, 2, 3, 4, 5].map((step) => (
                           <span
@@ -208,7 +292,12 @@ export default function MonitoresPage() {
 
             <div>
               <p className="label-xs mb-1.5">Disponibilidade</p>
-              <div className={cn("grid gap-1.5", selected.availability.some((slot) => slot.day === 6) ? "grid-cols-6" : "grid-cols-5")}>
+              <div
+                className={cn(
+                  "grid gap-1.5",
+                  selected.availability.some((slot) => slot.day === 6) ? "grid-cols-6" : "grid-cols-5",
+                )}
+              >
                 {(selected.availability.some((slot) => slot.day === 6) ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5]).map((day) => {
                   const slots = selected.availability.filter((slot) => slot.day === day);
                   return (
@@ -236,22 +325,354 @@ export default function MonitoresPage() {
               <Chip tone="neutral">{monitorKindLabels[selected.kind]}</Chip>
             </div>
 
-            <div className="flex flex-wrap justify-end gap-2">
-              {isMe(selected.id) ? (
-                <Link
-                  href="/configuracoes#perfil"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-medium text-ink transition-colors hover:bg-surface-muted"
-                >
-                  <UserRoundPen className="size-3.5" /> Editar meu perfil
-                </Link>
-              ) : null}
-              <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>
-                Fechar
-              </Button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              {isCoordinator ? (
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const target = selected;
+                      setSelectedId(null);
+                      setEditorState({ open: true, monitor: target });
+                    }}
+                  >
+                    <Pencil className="size-3.5" /> Editar
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-danger hover:bg-danger/10"
+                    disabled={deleteMutation.isPending}
+                    onClick={() => deleteMutation.mutate(selected.id)}
+                  >
+                    <Trash2 className="size-3.5" /> Remover
+                  </Button>
+                </div>
+              ) : (
+                <span />
+              )}
+
+              <div className="flex items-center gap-2">
+                {isMe(selected.id) ? (
+                  <Link
+                    href="/configuracoes#perfil"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[12px] font-medium text-ink transition-colors hover:bg-surface-muted"
+                  >
+                    <UserRoundPen className="size-3.5" /> Editar meu perfil
+                  </Link>
+                ) : null}
+                <Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>
+                  Fechar
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
       </Dialog>
+
+      <MonitorEditorDialog
+        open={editorState.open}
+        monitor={editorState.monitor}
+        topics={topics}
+        onClose={() => setEditorState({ open: false, monitor: null })}
+      />
+
+      <NewTopicDialog open={topicOpen} onClose={() => setTopicOpen(false)} />
     </>
+  );
+}
+
+function slotKeyOf(slot: Slot) {
+  return `${slot.day}-${slot.start}-${slot.end}`;
+}
+
+function MonitorEditorDialog({
+  open,
+  monitor,
+  topics,
+  onClose,
+}: {
+  open: boolean;
+  monitor: Monitor | null;
+  topics: Topic[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [className, setClassName] = useState("2º ano INFO");
+  const [kind, setKind] = useState<MonitorKind>("bolsista");
+  const [capacityHours, setCapacityHours] = useState(6);
+  const [online, setOnline] = useState(true);
+  const [bio, setBio] = useState("");
+  const [skills, setSkills] = useState<TopicSkill[]>([]);
+  const [slotKeys, setSlotKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (monitor) {
+      setName(monitor.name);
+      setEmail(monitor.email ?? "");
+      setClassName(monitor.className);
+      setKind(monitor.kind);
+      setCapacityHours(monitor.capacityHours);
+      setOnline(monitor.online);
+      setBio(monitor.bio);
+      setSkills(monitor.topics);
+      setSlotKeys(
+        pilotSlots
+          .filter((ps) => monitor.availability.some((a) => slotKeyOf(a) === slotKeyOf(ps)))
+          .map((ps) => ps.key),
+      );
+    } else {
+      setName("");
+      setEmail("");
+      setClassName("2º ano INFO");
+      setKind("bolsista");
+      setCapacityHours(6);
+      setOnline(true);
+      setBio("");
+      setSkills(topics[0] ? [{ topicId: topics[0].id, level: 4 }] : []);
+      setSlotKeys(pilotSlots.slice(0, 2).map((ps) => ps.key));
+    }
+  }, [open, monitor, topics]);
+
+  const invalidateAll = () => {
+    for (const key of ["monitors", "people", "dashboard", "reports", "requests"]) {
+      void queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
+
+  const createMutation = useMutation({
+    mutationFn: api.createMonitor,
+    onSuccess: () => {
+      toast.success("Monitor cadastrado com sucesso!");
+      invalidateAll();
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: MonitorPatch }) => api.updateMonitor(id, patch),
+    onSuccess: () => {
+      toast.success("Monitor atualizado!");
+      invalidateAll();
+      onClose();
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  const toggleTopic = (topicId: string) => {
+    setSkills((current) =>
+      current.some((s) => s.topicId === topicId)
+        ? current.filter((s) => s.topicId !== topicId)
+        : [...current, { topicId, level: 4 }],
+    );
+  };
+
+  const setLevel = (topicId: string, level: 1 | 2 | 3 | 4 | 5) => {
+    setSkills((current) => current.map((s) => (s.topicId === topicId ? { ...s, level } : s)));
+  };
+
+  const toggleSlot = (key: string) => {
+    setSlotKeys((current) => (current.includes(key) ? current.filter((k) => k !== key) : [...current, key]));
+  };
+
+  const handleSave = () => {
+    if (!name.trim()) {
+      toast.error("Informe o nome do monitor.");
+      return;
+    }
+    if (skills.length === 0) {
+      toast.error("Selecione ao menos um tópico que o monitor atende.");
+      return;
+    }
+    const availability: Slot[] = pilotSlots
+      .filter((ps) => slotKeys.includes(ps.key))
+      .map((ps) => ({ day: ps.day, start: ps.start, end: ps.end }));
+
+    if (availability.length === 0) {
+      toast.error("Selecione ao menos uma janela de disponibilidade.");
+      return;
+    }
+
+    if (monitor) {
+      updateMutation.mutate({
+        id: monitor.id,
+        patch: {
+          name: name.trim(),
+          email: email.trim(),
+          className: className.trim(),
+          kind,
+          capacityHours,
+          online,
+          bio: bio.trim(),
+          topics: skills,
+          availability,
+        },
+      });
+    } else {
+      createMutation.mutate({
+        name: name.trim(),
+        email: email.trim() || undefined,
+        className: className.trim(),
+        kind,
+        capacityHours,
+        online,
+        bio: bio.trim(),
+        topics: skills,
+        availability,
+      });
+    }
+  };
+
+  const saving = createMutation.isPending || updateMutation.isPending;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={monitor ? "Editar monitor" : "Cadastrar novo monitor"}
+      description="Defina vínculo, tópicos atendidos, carga semanal máxima e janelas disponíveis."
+      width="max-w-xl"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? "Salvando…" : monitor ? "Salvar alterações" : "Cadastrar monitor"}
+          </Button>
+        </>
+      }
+    >
+      <div className="max-h-[68vh] space-y-3.5 overflow-y-auto pr-1">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Nome completo">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex.: Lucas Almeida" maxLength={80} />
+          </Field>
+          <Field label="E-mail institucional (opcional)" hint="Vincula automaticamente ao login Supabase.">
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="lucas@escolar.ifrn.edu.br"
+              maxLength={120}
+            />
+          </Field>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Turma / curso">
+            <Input value={className} onChange={(e) => setClassName(e.target.value)} placeholder="2º ano INFO" maxLength={60} />
+          </Field>
+          <Field label="Carga máxima / semana">
+            <Select value={String(capacityHours)} onChange={(e) => setCapacityHours(Number(e.target.value))}>
+              {[2, 4, 6, 8, 10, 12].map((h) => (
+                <option key={h} value={String(h)}>
+                  {h} horas
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-line bg-surface-muted/60 px-3 py-2.5">
+          <div>
+            <p className="text-[12px] font-medium text-ink">Tipo de vínculo</p>
+            <Segmented
+              size="sm"
+              className="mt-1"
+              value={kind}
+              onChange={(val) => setKind(val)}
+              options={[
+                { value: "bolsista", label: "Monitor bolsista" },
+                { value: "voluntario", label: "Colega apoiador / voluntário" },
+              ]}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-ink-soft">Disponível agora</span>
+            <Switch checked={online} onChange={setOnline} label="Disponível agora" />
+          </div>
+        </div>
+
+        <Field label="Tópicos e nível de domínio (1 a 5)">
+          <div className="space-y-1.5 rounded-[12px] border border-line p-2.5">
+            {topics.map((t) => {
+              const skill = skills.find((s) => s.topicId === t.id);
+              return (
+                <div key={t.id} className="flex flex-wrap items-center justify-between gap-2 py-1">
+                  <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(skill)}
+                      onChange={() => toggleTopic(t.id)}
+                      className="accent-[var(--accent)]"
+                    />
+                    <span>{t.name}</span>
+                    <span className="text-[11px] text-ink-faint">({t.component})</span>
+                  </label>
+                  {skill ? (
+                    <div className="flex items-center gap-1">
+                      {([1, 2, 3, 4, 5] as const).map((lvl) => (
+                        <button
+                          key={lvl}
+                          type="button"
+                          onClick={() => setLevel(t.id, lvl)}
+                          className={cn(
+                            "num size-6 rounded-full border text-[11px] font-medium transition-colors",
+                            skill.level === lvl
+                              ? "border-accent bg-accent-soft text-accent-strong"
+                              : "border-line bg-surface text-ink-soft hover:bg-surface-muted",
+                          )}
+                        >
+                          {lvl}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </Field>
+
+        <Field label="Janelas disponíveis">
+          <div className="flex flex-wrap gap-1.5">
+            {pilotSlots.map((slot) => {
+              const active = slotKeys.includes(slot.key);
+              return (
+                <button
+                  key={slot.key}
+                  type="button"
+                  onClick={() => toggleSlot(slot.key)}
+                  aria-pressed={active}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                    active
+                      ? "border-accent bg-accent-soft text-accent-strong"
+                      : "border-line bg-surface text-ink-soft hover:bg-surface-muted",
+                  )}
+                >
+                  {slot.label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
+        <Field label="Apresentação / foco de apoio (opcional)">
+          <Textarea
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            placeholder="Ex.: Apoio em resolução passo a passo de listas e laboratório."
+            maxLength={240}
+          />
+        </Field>
+      </div>
+    </Dialog>
   );
 }
