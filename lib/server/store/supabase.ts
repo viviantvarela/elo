@@ -13,7 +13,7 @@ import { buildSeed, type Database } from "../seed";
  *
  * Vantagens no serverless (Vercel):
  *  - Não depende de string de conexão TCP nem de senha do banco
- *  - Uma única chamada HTTPS lê ou grava as 12 tabelas dentro de uma transação
+ *  - Uma única chamada HTTPS lê ou grava as 16 tabelas dentro de uma transação
  *    Postgres protegida por `pg_advisory_xact_lock`
  *  - Row Level Security permanece ativo nas tabelas públicas (`service_role` only)
  */

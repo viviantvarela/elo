@@ -23,6 +23,9 @@ const sessionsRoute = await import("../app/api/sessions/route");
 const topicsRoute = await import("../app/api/topics/route");
 const monitorsRoute = await import("../app/api/monitors/route");
 const studentsRoute = await import("../app/api/students/route");
+const teachersRoute = await import("../app/api/teachers/route");
+const alignmentRoute = await import("../app/api/alignment/route");
+const alignmentMeetingsRoute = await import("../app/api/alignment/meetings/route");
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`FALHOU: ${message}`);
@@ -205,6 +208,48 @@ assert(delMonRes.status === 200, "coordenação removeu monitor sem pendências"
 
 const delTopicRes = await topicsRoute.DELETE(jsonReq(`/api/topics?id=${createdTopic.id}`, "DELETE", "coordinator"));
 assert(delTopicRes.status === 200, "coordenação removeu tópico sem pendências");
+
+console.log("\n5) Espaço de alinhamento (professor ↔ monitor + Google Meet) e RBAC");
+const coordAlign = await alignmentRoute.GET(jsonReq("/api/alignment", "GET", "coordinator"));
+assert(coordAlign.status === 403, "coordenação bloqueada em GET /api/alignment (403)");
+
+const studentAlign = await alignmentRoute.GET(jsonReq("/api/alignment", "GET", "student:a1"));
+assert(studentAlign.status === 403, "estudante bloqueado em GET /api/alignment (403)");
+
+const teacherAlignGet = await alignmentRoute.GET(jsonReq("/api/alignment", "GET", "teacher:t1"));
+assert(teacherAlignGet.status === 200, "professora t1 lê seu espaço de alinhamento");
+const teacherAlignData = (await teacherAlignGet.json()) as { messages: { topicId: string }[] };
+assert(
+  teacherAlignData.messages.every((m) => m.topicId === "mat"),
+  "professora t1 recebe apenas mensagens do seu tópico (mat)",
+);
+
+const wrongTopicMsg = await alignmentRoute.POST(
+  jsonReq("/api/alignment", "POST", "teacher:t1", {
+    topicId: "prog",
+    authorRole: "teacher",
+    authorId: "t1",
+    text: "Tentando postar em tópico de outro professor",
+  }),
+);
+assert(wrongTopicMsg.status === 403, "professora t1 bloqueada em tópico que não leciona (403)");
+
+const validMeet = await alignmentMeetingsRoute.POST(
+  jsonReq("/api/alignment/meetings", "POST", "teacher:t1", {
+    topicId: "mat",
+    authorRole: "teacher",
+    authorId: "t1",
+    title: "Revisão de Funções Afins",
+    scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+    durationMinutes: 30,
+  }),
+);
+assert(validMeet.status === 200, "professora t1 agendou reunião no Google Meet");
+
+const teacherPatchForbidden = await teachersRoute.PATCH(
+  jsonReq("/api/teachers", "PATCH", "teacher:t1", { id: "t2", bio: "Outro perfil" }),
+);
+assert(teacherPatchForbidden.status === 403, "professora t1 não pode editar perfil de t2 (403)");
 
 const afterReset = await resetDb();
 assert(afterReset.requests.length === first.requests.length, "resetDb restaurou a base inicial");

@@ -1,11 +1,14 @@
 import type {
   AccountLink,
+  AlignmentMeeting,
+  AlignmentMessage,
   DemoProfile,
   HelpRequest,
   Monitor,
   Session,
   Settings,
   Student,
+  Teacher,
   Topic,
 } from "../types";
 
@@ -13,8 +16,11 @@ export interface Database {
   topics: Topic[];
   students: Student[];
   monitors: Monitor[];
+  teachers: Teacher[];
   requests: HelpRequest[];
   sessions: Session[];
+  alignmentMessages: AlignmentMessage[];
+  alignmentMeetings: AlignmentMeeting[];
   accounts: AccountLink[];
   settings: Settings;
   profile: DemoProfile;
@@ -245,6 +251,45 @@ const monitors: Monitor[] = [
   },
 ];
 
+const teachers: Teacher[] = [
+  {
+    id: "t1",
+    name: "Roberta Austregésilo",
+    className: "Professora de Matemática I",
+    email: "roberta.austregesilo@ifrn.edu.br",
+    topics: ["mat"],
+    color: "sage",
+    bio: "Leciona Matemática I para o 1º e 2º ano. Quer revisar com os monitores os pontos onde a turma mais trava.",
+  },
+  {
+    id: "t2",
+    name: "Fabiano Medeiros",
+    className: "Professor de Lógica e Programação",
+    email: "fabiano.medeiros@ifrn.edu.br",
+    topics: ["prog"],
+    color: "lilac",
+    bio: "Acompanha de perto a monitoria de Programação — ajusta a lista de exercícios com o que aparece na monitoria.",
+  },
+  {
+    id: "t3",
+    name: "Camila Herculano",
+    className: "Professora de Física I",
+    email: "camila.herculano@ifrn.edu.br",
+    topics: ["fis"],
+    color: "blue",
+    bio: "Dá Física I para os três anos do integrado. Usa o retorno da monitoria para repensar as aulas de laboratório.",
+  },
+  {
+    id: "t4",
+    name: "Edvaldo Queiroz",
+    className: "Professor de Química I",
+    email: "edvaldo.queiroz@ifrn.edu.br",
+    topics: ["quim"],
+    color: "sand",
+    bio: "Professor de Química I. Entrou no piloto para entender onde a turma mais pede monitoria.",
+  },
+];
+
 type RequestSeed = [
   studentIdx: number,
   topicId: string,
@@ -438,12 +483,136 @@ export function buildSeed(now = new Date()): Database {
     retentionDays: 365,
   };
 
+  /* -------------------- espaço de alinhamento (professor ↔ monitor) ------------------- */
+  // monitores de cada tópico lecionado — primeiro da lista "puxa" a conversa de exemplo
+  const monitorForTopic = (topicId: string) => monitors.find((monitor) => monitor.topics.some((t) => t.topicId === topicId));
+
+  const alignmentMessages: AlignmentMessage[] = [];
+  const alignmentMeetings: AlignmentMeeting[] = [];
+  let alignmentSeq = 0;
+
+  const addMessage = (
+    topicId: string,
+    author: { role: "teacher" | "monitor"; id: string; name: string; color: Teacher["color"] },
+    text: string,
+    daysAgo: number,
+    hour: number,
+  ) => {
+    alignmentSeq += 1;
+    alignmentMessages.push({
+      id: `am${String(alignmentSeq).padStart(2, "0")}`,
+      topicId,
+      authorRole: author.role,
+      authorId: author.id,
+      authorName: author.name,
+      authorColor: author.color,
+      text,
+      createdAt: at(daysAgo, hour, Math.floor(rand() * 50)).toISOString(),
+    });
+  };
+
+  const seedThread = (
+    teacher: Teacher,
+    topicId: string,
+    exchange: { from: "teacher" | "monitor"; text: string; daysAgo: number; hour: number }[],
+  ) => {
+    const monitor = monitorForTopic(topicId);
+    if (!monitor) return;
+    exchange.forEach((entry) => {
+      const author =
+        entry.from === "teacher"
+          ? { role: "teacher" as const, id: teacher.id, name: teacher.name, color: teacher.color }
+          : { role: "monitor" as const, id: monitor.id, name: monitor.name, color: monitor.color };
+      addMessage(topicId, author, entry.text, entry.daysAgo, entry.hour);
+    });
+  };
+
+  seedThread(teachers[0], "mat", [
+    {
+      from: "teacher",
+      text: "Pessoal, reparei que a maior parte dos pedidos de monitoria é em função do 1º grau e função afim. Dá pra reforçar isso na próxima aula?",
+      daysAgo: 6,
+      hour: 9,
+    },
+    {
+      from: "monitor",
+      text: "Sim! Quase todo mundo chega confuso com o gráfico, não com a fórmula. Talvez valha a pena começar a aula já desenhando, antes da parte algébrica.",
+      daysAgo: 6,
+      hour: 14,
+    },
+    {
+      from: "teacher",
+      text: "Boa, vou inverter a ordem na próxima turma. Bora marcar 20 minutos essa semana pra combinar os exemplos?",
+      daysAgo: 5,
+      hour: 10,
+    },
+  ]);
+
+  seedThread(teachers[1], "prog", [
+    {
+      from: "monitor",
+      text: "Professor, a galera trava bastante em índice de lista fora do intervalo. Dá pra fazer um exercício guiado disso antes da prova?",
+      daysAgo: 4,
+      hour: 16,
+    },
+    {
+      from: "teacher",
+      text: "Faz sentido, isso é recorrente mesmo. Vou incluir um exercício de depuração passo a passo na próxima aula.",
+      daysAgo: 3,
+      hour: 11,
+    },
+  ]);
+
+  seedThread(teachers[2], "fis", [
+    {
+      from: "teacher",
+      text: "Como está a procura por monitoria de óptica? Quero saber se vale reservar um horário extra de laboratório.",
+      daysAgo: 2,
+      hour: 15,
+    },
+  ]);
+
+  // uma reunião futura de exemplo, já com link do Meet (modo demonstração)
+  const matMonitor = monitorForTopic("mat");
+  if (matMonitor) {
+    alignmentSeq += 1;
+    const scheduledAt = new Date(now);
+    scheduledAt.setDate(scheduledAt.getDate() + 2);
+    scheduledAt.setHours(16, 0, 0, 0);
+    const code = "elo-mat-align";
+    alignmentMeetings.push({
+      id: `ak${String(alignmentSeq).padStart(2, "0")}`,
+      topicId: "mat",
+      title: "Alinhamento — Matemática I",
+      scheduledAt: scheduledAt.toISOString(),
+      durationMinutes: 30,
+      meetLink: `https://meet.google.com/${code}`,
+      meetCode: code,
+      provider: "demo",
+      createdByRole: "teacher",
+      createdById: teachers[0].id,
+      createdByName: teachers[0].name,
+      createdAt: at(5, 10, 5).toISOString(),
+      status: "scheduled",
+    });
+    addMessage(
+      "mat",
+      { role: "teacher", id: teachers[0].id, name: teachers[0].name, color: teachers[0].color },
+      "Marquei a reunião no Google Meet — segue o link acima. Até lá!",
+      5,
+      10,
+    );
+  }
+
   return {
     topics: structuredClone(topics),
     students,
     monitors: structuredClone(monitors),
+    teachers: structuredClone(teachers),
     requests,
     sessions,
+    alignmentMessages,
+    alignmentMeetings,
     accounts: [],
     settings,
     profile: blankCoordinatorProfile(),

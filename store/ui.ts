@@ -14,7 +14,7 @@ export type AuthMode = "supabase" | "demo" | "signed_out";
  *
  * Suporta dois modos:
  *  - `"supabase"`: usuário autenticado de verdade via Supabase Auth
- *  - `"demo"`: modo demonstração (troca rápida entre Coordenação, Monitor e Estudante)
+ *  - `"demo"`: modo demonstração (troca rápida entre Coordenação, Monitor, Professor e Estudante)
  *  - `"signed_out"`: usuário saiu da conta e vê a tela `/entrar`
  */
 interface UiState {
@@ -26,6 +26,8 @@ interface UiState {
   studentId: string | null;
   /** monitor ativo quando `role` é "monitor" */
   monitorId: string | null;
+  /** professor ativo quando `role` é "teacher" */
+  teacherId: string | null;
   accent: AccentKey;
   theme: Theme;
   sidebarOpen: boolean;
@@ -40,6 +42,7 @@ interface UiState {
     role: Role;
     studentId?: string | null;
     monitorId?: string | null;
+    teacherId?: string | null;
   }) => void;
   signOutState: () => void;
   setAccent: (accent: AccentKey) => void;
@@ -51,10 +54,13 @@ interface UiState {
 const KEY = "elo.ui.v2";
 const LEGACY_KEY = "elo.ui.v1";
 
-const roles: Role[] = ["student", "monitor", "coordinator"];
+const roles: Role[] = ["student", "monitor", "coordinator", "teacher"];
 const accents: AccentKey[] = ["green", "ocean", "plum", "rose", "amber"];
 
-type Persisted = Pick<UiState, "authMode" | "authEmail" | "role" | "studentId" | "monitorId" | "accent" | "theme">;
+type Persisted = Pick<
+  UiState,
+  "authMode" | "authEmail" | "role" | "studentId" | "monitorId" | "teacherId" | "accent" | "theme"
+>;
 
 function apply(accent: AccentKey, theme: Theme) {
   if (typeof document === "undefined") return;
@@ -73,6 +79,7 @@ function snapshot(state: UiState): Persisted {
     role: state.role,
     studentId: state.studentId,
     monitorId: state.monitorId,
+    teacherId: state.teacherId,
     accent: state.accent,
     theme: state.theme,
   };
@@ -85,6 +92,7 @@ export const useUi = create<UiState>((set, get) => ({
   role: "coordinator",
   studentId: null,
   monitorId: null,
+  teacherId: null,
   accent: "green",
   theme: "light",
   sidebarOpen: false,
@@ -111,6 +119,7 @@ export const useUi = create<UiState>((set, get) => ({
         role: saved.role && roles.includes(saved.role) ? saved.role : "coordinator",
         studentId: typeof saved.studentId === "string" ? saved.studentId : null,
         monitorId: typeof saved.monitorId === "string" ? saved.monitorId : null,
+        teacherId: typeof saved.teacherId === "string" ? saved.teacherId : null,
         accent,
         theme,
         hydrated: true,
@@ -130,11 +139,12 @@ export const useUi = create<UiState>((set, get) => ({
       role,
       studentId: role === "student" && personId !== undefined ? personId : current.studentId,
       monitorId: role === "monitor" && personId !== undefined ? personId : current.monitorId,
+      teacherId: role === "teacher" && personId !== undefined ? personId : current.teacherId,
     });
     save(snapshot(get()));
   },
 
-  setSupabaseSession: ({ email, accessToken, role, studentId, monitorId }) => {
+  setSupabaseSession: ({ email, accessToken, role, studentId, monitorId, teacherId }) => {
     set({
       authMode: "supabase",
       authEmail: email,
@@ -142,6 +152,7 @@ export const useUi = create<UiState>((set, get) => ({
       role,
       studentId: role === "student" ? (studentId ?? null) : null,
       monitorId: role === "monitor" ? (monitorId ?? null) : null,
+      teacherId: role === "teacher" ? (teacherId ?? null) : null,
     });
     save(snapshot(get()));
   },

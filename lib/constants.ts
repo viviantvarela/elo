@@ -46,6 +46,7 @@ export const roleLabels: Record<Role, string> = {
   student: "Estudante",
   monitor: "Monitor(a)",
   coordinator: "Coordenação",
+  teacher: "Professor(a)",
 };
 
 /** pesos iniciais do algoritmo de pareamento (calibráveis no piloto) */
@@ -61,8 +62,15 @@ export const navItems = [
   { href: "/pedidos", label: "Pedidos de ajuda", icon: "life-buoy", roles: ["coordinator", "monitor", "student"] },
   { href: "/monitores", label: "Monitores", icon: "users", roles: ["coordinator", "monitor", "student"] },
   { href: "/agenda", label: "Agenda", icon: "calendar", roles: ["coordinator", "monitor", "student"] },
+  {
+    href: "/alinhamento",
+    label: "Alinhamento",
+    icon: "align",
+    // espaço restrito: só quem leciona (professor) e quem monitora o mesmo tópico
+    roles: ["teacher", "monitor"],
+  },
   { href: "/relatorios", label: "Relatórios", icon: "chart", roles: ["coordinator", "monitor"] },
-  { href: "/configuracoes", label: "Configurações", icon: "settings", roles: ["coordinator", "monitor", "student"] },
+  { href: "/configuracoes", label: "Configurações", icon: "settings", roles: ["coordinator", "monitor", "student", "teacher"] },
 ] as const;
 
 /** A página (pelo caminho) está liberada para este papel? Usa as mesmas regras do menu. */
@@ -71,10 +79,22 @@ export function canAccess(pathname: string, role: Role) {
   return item ? (item.roles as readonly Role[]).includes(role) : true;
 }
 
+/** Primeira página do menu que este papel pode ver — ex.: professor cai em "Alinhamento", não em "Painel". */
+export function firstAccessibleHref(role: Role) {
+  return navItems.find((item) => (item.roles as readonly Role[]).includes(role))?.href ?? "/painel";
+}
+
 export const monitorKindLabels = {
   bolsista: "bolsista",
   voluntario: "voluntário(a)",
 } as const;
+
+export const meetProviderLabels = {
+  "google-meet-api": "Google Meet",
+  demo: "Google Meet (demonstração)",
+} as const;
+
+export const meetingDurations = [30, 45, 60, 90] as const;
 
 export const accentOptions = [
   { key: "green", label: "Verde Elo" },

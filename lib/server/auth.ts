@@ -16,6 +16,7 @@ export interface Actor {
   role: Role;
   studentId?: string;
   monitorId?: string;
+  teacherId?: string;
   email?: string;
 }
 
@@ -72,9 +73,6 @@ export async function verifySupabaseToken(token: string): Promise<VerifiedAuthUs
       metadata: (data.user.user_metadata as Record<string, unknown>) ?? {},
     };
   } catch (error) {
-    // Apenas em ambiente de desenvolvimento isolado sem saída de rede externa
-    // (ex.: sandbox local), aceita claims emitidos pelo projeto configurado.
-    // Em produção (`NODE_ENV === "production"`), exige verificação online no GoTrue.
     if (process.env.NODE_ENV !== "production") {
       const message = error instanceof Error ? `${error.message} ${String((error as { cause?: unknown }).cause ?? "")}` : "";
       if (/fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(message)) {
@@ -93,6 +91,9 @@ export function mapAuthUserToActor(authUser: VerifiedAuthUser, db: Database): Ac
     if (linked.role === "coordinator") {
       return { mode: "supabase", role: "coordinator", email };
     }
+    if (linked.role === "teacher" && linked.teacherId && db.teachers.some((t) => t.id === linked.teacherId)) {
+      return { mode: "supabase", role: "teacher", teacherId: linked.teacherId, email };
+    }
     if (linked.role === "monitor" && linked.monitorId && db.monitors.some((m) => m.id === linked.monitorId)) {
       return { mode: "supabase", role: "monitor", monitorId: linked.monitorId, email };
     }
@@ -103,6 +104,11 @@ export function mapAuthUserToActor(authUser: VerifiedAuthUser, db: Database): Ac
 
   if (db.profile.email && db.profile.email.toLowerCase() === email) {
     return { mode: "supabase", role: "coordinator", email };
+  }
+
+  const teacher = db.teachers.find((t) => t.email?.toLowerCase() === email);
+  if (teacher) {
+    return { mode: "supabase", role: "teacher", teacherId: teacher.id, email };
   }
 
   const monitor = db.monitors.find((m) => m.email?.toLowerCase() === email);
@@ -145,6 +151,11 @@ export async function resolveActor(request: Request, db: Database): Promise<Acto
     const monitor = db.monitors.find((m) => m.id === idPart) ?? db.monitors[0];
     if (!monitor) return null;
     return { mode: "demo", role: "monitor", monitorId: monitor.id };
+  }
+  if (rolePart === "teacher") {
+    const teacher = db.teachers.find((t) => t.id === idPart) ?? db.teachers[0];
+    if (!teacher) return null;
+    return { mode: "demo", role: "teacher", teacherId: teacher.id };
   }
 
   return { mode: "demo", role: "coordinator" };

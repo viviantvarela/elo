@@ -13,6 +13,7 @@ import {
   Lock,
   LogOut,
   Menu,
+  MessagesSquare,
   Moon,
   Search,
   Settings,
@@ -30,9 +31,10 @@ import { toast } from "sonner";
 import { SwitchUserDialog } from "@/components/shell/switch-user-dialog";
 import { Avatar, Button, Chip, Dialog, EmptyState, Panel, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
-import { canAccess, navItems, roleLabels } from "@/lib/constants";
+import { canAccess, firstAccessibleHref, navItems, roleLabels } from "@/lib/constants";
 import { useCurrentUser, visibleRequests } from "@/lib/current-user";
 import { getSupabaseBrowserClient, isDemoModeEnabled } from "@/lib/supabase-browser";
+import type { Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
@@ -41,6 +43,7 @@ const icons = {
   "life-buoy": LifeBuoy,
   users: Users,
   calendar: CalendarDays,
+  align: MessagesSquare,
   chart: BarChart3,
   settings: Settings,
 } as const;
@@ -439,21 +442,23 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
 
 /* -------------------------------- app shell ------------------------------- */
 
-function NoAccess({ roleLabel, isDemo }: { roleLabel: string; isDemo: boolean }) {
+/** Página fora do papel atual (ex.: estudante abrindo Relatórios pela URL). */
+function NoAccess({ role, roleLabel, isDemo }: { role: Role; roleLabel: string; isDemo: boolean }) {
   const setSwitcherOpen = useUi((state) => state.setSwitcherOpen);
+  const home = firstAccessibleHref(role);
   return (
     <Panel>
       <EmptyState
         icon={<Lock className="size-6" />}
         title="Esta página não faz parte do seu perfil"
-        detail={`Você está usando o Elo como ${roleLabel}. Volte ao painel${isDemo ? " ou troque de usuário para ver esta página" : ""}.`}
+        detail={`Você está usando o Elo como ${roleLabel}. Volte para a sua área${isDemo ? " ou troque de usuário para ver esta página" : ""}.`}
         action={
           <div className="flex flex-wrap justify-center gap-2">
             <Link
-              href="/painel"
+              href={home}
               className="inline-flex h-9.5 items-center gap-2 rounded-full bg-accent px-4 text-[13px] font-medium text-white transition-colors hover:bg-accent-strong"
             >
-              Ir para o painel
+              Ir para a minha área
             </Link>
             {isDemo ? (
               <Button variant="outline" onClick={() => setSwitcherOpen(true)}>
@@ -555,7 +560,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ) : canAccess(pathname, user.role) ? (
               children
             ) : (
-              <NoAccess roleLabel={roleLabels[user.role]} isDemo={user.authMode === "demo" && isDemoModeEnabled()} />
+              <NoAccess
+                role={user.role}
+                roleLabel={roleLabels[user.role]}
+                isDemo={user.authMode === "demo" && isDemoModeEnabled()}
+              />
             )}
           </main>
         </div>

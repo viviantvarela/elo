@@ -9,7 +9,13 @@ export async function GET(request: Request) {
     const db = await readDb();
     const actor = await resolveActor(request, db);
     if (!actor) return unauthorized();
-    return ok({ coordinator: db.profile, students: db.students, monitors: db.monitors, topics: db.topics });
+    return ok({
+      coordinator: db.profile,
+      students: db.students,
+      monitors: db.monitors,
+      teachers: db.teachers,
+      topics: db.topics,
+    });
   } catch {
     return serverError("Não foi possível carregar os usuários.");
   }

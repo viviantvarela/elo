@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Avatar, Chip, Dialog, Segmented, Skeleton } from "@/components/ui";
-import { canAccess, monitorKindLabels, roleLabels } from "@/lib/constants";
+import { canAccess, firstAccessibleHref, monitorKindLabels, roleLabels } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/current-user";
 import type { PastelKey, Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -81,6 +81,21 @@ export function SwitchUserDialog() {
         .sort(byName);
     }
 
+    if (tab === "teacher") {
+      return people.teachers
+        .map((teacher) => ({
+          id: teacher.id,
+          name: teacher.name,
+          detail: teacher.className,
+          color: teacher.color,
+          extra: teacher.topics
+            .map((topicId) => people.topics.find((topic) => topic.id === topicId)?.name ?? topicId)
+            .join(" · "),
+        }))
+        .filter(matches)
+        .sort(byName);
+    }
+
     return people.monitors
       .map((monitor) => ({
         id: monitor.id,
@@ -104,7 +119,7 @@ export function SwitchUserDialog() {
     setIdentity(tab, tab === "coordinator" ? null : entry.id);
     void queryClient.invalidateQueries();
     toast.success(`Agora você está usando o Elo como ${entry.name}.`);
-    if (!canAccess(pathname, tab)) router.push("/painel");
+    if (!canAccess(pathname, tab)) router.push(firstAccessibleHref(tab));
   };
 
   return (
@@ -127,6 +142,7 @@ export function SwitchUserDialog() {
             { value: "coordinator", label: roleLabels.coordinator },
             { value: "student", label: `Estudantes · ${people?.students.length ?? 0}` },
             { value: "monitor", label: `Monitores · ${people?.monitors.length ?? 0}` },
+            { value: "teacher", label: `Professores · ${people?.teachers.length ?? 0}` },
           ]}
         />
         {tab !== "coordinator" ? (
@@ -151,7 +167,11 @@ export function SwitchUserDialog() {
           ))}
         </div>
       ) : entries.length === 0 ? (
-        <p className="px-1 py-6 text-center text-[12.5px] text-ink-soft">Ninguém encontrado com “{query}”.</p>
+        tab === "teacher" ? (
+          <p className="px-1 py-6 text-center text-[12.5px] text-ink-soft">Nenhum professor cadastrado ainda.</p>
+        ) : (
+          <p className="px-1 py-6 text-center text-[12.5px] text-ink-soft">Ninguém encontrado com “{query}”.</p>
+        )
       ) : (
         <ul
           className="-mr-2 max-h-[min(52vh,440px)] space-y-1 overflow-y-auto pr-2"

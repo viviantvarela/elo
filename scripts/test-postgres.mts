@@ -35,18 +35,21 @@ function assert(condition: boolean, message: string) {
 
 const store = createPostgresStore(queryable);
 
-console.log("\n1) primeiro acesso cria o esquema (12 tabelas) e semeia");
+console.log("\n1) primeiro acesso cria o esquema (16 tabelas) e semeia");
 const db = await store.readDb();
 assert(db.topics.length === 6, `6 tópicos (veio ${db.topics.length})`);
 assert(db.monitors.length === 8, `8 monitores (veio ${db.monitors.length})`);
+assert(db.teachers.length === 4, `4 professores (veio ${db.teachers.length})`);
 assert(db.requests.length === 33, `33 pedidos (veio ${db.requests.length})`);
 assert(db.sessions.length === 37, `37 sessões (veio ${db.sessions.length})`);
+assert(db.alignmentMessages.length > 0, `mensagens de alinhamento semeadas (${db.alignmentMessages.length})`);
+assert(db.alignmentMeetings.length === 1, `1 reunião de alinhamento semeada (${db.alignmentMeetings.length})`);
 
 const tables = await client.query<{ table_name: string }>(
   "select table_name from information_schema.tables where table_schema='public' order by table_name",
 );
 console.log("  tabelas:", tables.rows.map((r) => r.table_name).join(", "));
-assert(tables.rows.length === 12, `12 tabelas criadas (veio ${tables.rows.length})`);
+assert(tables.rows.length === 16, `16 tabelas criadas (veio ${tables.rows.length})`);
 
 const monitorTopics = await client.query<{ count: string }>("select count(*)::text as count from elo_monitor_topics");
 assert(Number(monitorTopics.rows[0].count) === 15, `15 vínculos monitor↔tópico (veio ${monitorTopics.rows[0].count})`);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, GraduationCap, KeyRound, ShieldCheck, Sparkles, UserCheck, Users } from "lucide-react";
+import { ArrowRight, GraduationCap, KeyRound, MessagesSquare, ShieldCheck, Sparkles, UserCheck, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { Logo } from "@/components/shell/app-shell";
 import { Button, Chip, Field, Input, Panel, Segmented, Select } from "@/components/ui";
 import { api } from "@/lib/api";
-import { CAMPUS } from "@/lib/constants";
+import { CAMPUS, firstAccessibleHref } from "@/lib/constants";
 import { getSupabaseBrowserClient, isDemoModeEnabled, isSupabaseClientConfigured } from "@/lib/supabase-browser";
 import type { Role } from "@/lib/types";
 import { useUi } from "@/store/ui";
@@ -45,7 +45,7 @@ export default function EntrarPage() {
     setIdentity(role, personId);
     void queryClient.invalidateQueries();
     toast.success(label ? `Modo demonstração: ${label}` : "Modo demonstração ativado.");
-    router.push("/painel");
+    router.push(firstAccessibleHref(role));
   };
 
   const handleSubmit = async (event: FormEvent) => {
@@ -83,7 +83,8 @@ export default function EntrarPage() {
     setPending(true);
     try {
       if (mode === "signup") {
-        const roleForSignup: Role = isStaffEmail && desiredRole === "coordinator" ? "coordinator" : "student";
+        const roleForSignup: Role =
+          isStaffEmail && (desiredRole === "coordinator" || desiredRole === "teacher") ? desiredRole : "student";
         const { data, error } = await sb.auth.signUp({
           email: normalizedEmail,
           password,
@@ -124,10 +125,11 @@ export default function EntrarPage() {
           role: actor.role,
           studentId: actor.studentId ?? null,
           monitorId: actor.monitorId ?? null,
+          teacherId: actor.teacherId ?? null,
         });
         await queryClient.invalidateQueries();
         toast.success("Conta institucional criada com sucesso!");
-        router.push("/painel");
+        router.push(firstAccessibleHref(actor.role));
         return;
       }
 
@@ -153,10 +155,11 @@ export default function EntrarPage() {
         role: actor.role,
         studentId: actor.studentId ?? null,
         monitorId: actor.monitorId ?? null,
+        teacherId: actor.teacherId ?? null,
       });
       await queryClient.invalidateQueries();
       toast.success("Sessão iniciada com sucesso.");
-      router.push("/painel");
+      router.push(firstAccessibleHref(actor.role));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Não foi possível autenticar.");
     } finally {
@@ -181,15 +184,16 @@ export default function EntrarPage() {
               Monitoria entre pares com pareamento inteligente e horas certificáveis.
             </h1>
             <p className="max-w-lg text-[14px] leading-relaxed text-emerald-50/85">
-              Conecte dúvidas reais a monitores e colegas apoiadores considerando afinidade no tópico, horários em comum
-              e equilíbrio de carga semanal.
+              Conecte dúvidas reais a monitores e colegas apoiadores considerando afinidade no tópico, horários em comum,
+              alinhamento direto com professores e equilíbrio de carga semanal.
             </p>
           </div>
 
-          <div className="grid gap-2.5 sm:grid-cols-3">
+          <div className="grid gap-2.5 sm:grid-cols-2">
             {[
               { title: "Estudantes", desc: "Pedem ajuda por tópico e avaliam o atendimento." },
               { title: "Monitores", desc: "Aceitam pedidos, agendam e somam horas automáticas." },
+              { title: "Professores", desc: "Alinham foco das aulas com monitores e agendam no Meet." },
               { title: "Coordenação", desc: "Calibra pesos, gerencia vagas e acompanha indicadores." },
             ].map((item) => (
               <div key={item.title} className="rounded-[16px] border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
@@ -279,8 +283,20 @@ export default function EntrarPage() {
                   onChange={(val) => setDesiredRole(val)}
                   options={[
                     { value: "coordinator", label: "Coordenação" },
+                    { value: "teacher", label: "Professor(a)" },
                     { value: "student", label: "Estudante" },
                   ]}
+                />
+              </Field>
+            ) : null}
+
+            {mode === "signup" && isStaffEmail && desiredRole === "teacher" ? (
+              <Field label="Disciplina / função">
+                <Input
+                  value={className}
+                  onChange={(e) => setClassName(e.target.value)}
+                  placeholder="Ex.: Professora de Matemática I"
+                  maxLength={80}
                 />
               </Field>
             ) : null}
@@ -349,7 +365,7 @@ export default function EntrarPage() {
                 </span>
                 <span className="text-[11px] text-ink-faint">1 clique · sem senha</span>
               </div>
-              <div className="grid gap-2 sm:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => enterDemoAs("coordinator", null, "Coordenação")}
@@ -367,6 +383,15 @@ export default function EntrarPage() {
                   <Users className="size-4 text-accent" />
                   <span className="mt-1.5 text-[12.5px] font-semibold text-ink">Monitor(a)</span>
                   <span className="text-[10.5px] text-ink-faint">Helena · Matemática</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => enterDemoAs("teacher", "t1", "Roberta Austregésilo (Professora)")}
+                  className="flex flex-col items-start rounded-[14px] border border-line bg-surface p-2.5 text-left transition-colors hover:border-accent/40 hover:bg-accent-tint"
+                >
+                  <MessagesSquare className="size-4 text-accent" />
+                  <span className="mt-1.5 text-[12.5px] font-semibold text-ink">Professor(a)</span>
+                  <span className="text-[10.5px] text-ink-faint">Roberta · Alinhamento & Meet</span>
                 </button>
                 <button
                   type="button"

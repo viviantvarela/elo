@@ -5,7 +5,7 @@
 -- `ensureSchema` em lib/server/store/postgres.ts).
 --
 -- Inclui:
---   - 12 tabelas relacionais (`elo_*`) com Row Level Security habilitado
+--   - 16 tabelas relacionais (`elo_*`) com Row Level Security habilitado
 --   - Funções transacionais `elo_read_snapshot` e `elo_write_snapshot`
 --     usadas pelo store HTTPS do Supabase (`service_role`) com advisory lock
 -- ---------------------------------------------------------------------------
@@ -101,6 +101,53 @@ create table if not exists public.elo_sessions (
   location    text
 );
 
+create table if not exists public.elo_teachers (
+  id          text primary key,
+  name        text not null,
+  class_name  text not null,
+  email       text not null default '',
+  color       text not null,
+  bio         text not null default ''
+);
+
+create table if not exists public.elo_teacher_topics (
+  teacher_id  text not null references public.elo_teachers(id) on delete cascade,
+  topic_id    text not null references public.elo_topics(id) on delete cascade,
+  primary key (teacher_id, topic_id)
+);
+
+-- Espaço de alinhamento: conversa entre o professor de um componente e os
+-- monitores daquele tópico, com reuniões no Google Meet. Fora do alcance de
+-- estudantes e coordenação (ver lib/constants.ts → navItems).
+create table if not exists public.elo_alignment_messages (
+  id            text primary key,
+  topic_id      text not null references public.elo_topics(id) on delete cascade,
+  author_role   text not null check (author_role in ('teacher', 'monitor')),
+  author_id     text not null,
+  author_name   text not null,
+  author_color  text not null,
+  text          text not null,
+  created_at    timestamptz not null
+);
+
+create table if not exists public.elo_alignment_meetings (
+  id                text primary key,
+  topic_id          text not null references public.elo_topics(id) on delete cascade,
+  title             text not null,
+  scheduled_at      timestamptz not null,
+  duration_minutes  integer not null,
+  meet_link         text not null,
+  meet_code         text not null,
+  -- 'google-meet-api': criado de verdade pela Google Meet REST API (meet.googleapis.com)
+  -- 'demo': sem credenciais do Google configuradas — link de demonstração
+  provider          text not null check (provider in ('google-meet-api', 'demo')),
+  created_by_role   text not null check (created_by_role in ('teacher', 'monitor')),
+  created_by_id     text not null,
+  created_by_name   text not null,
+  created_at        timestamptz not null,
+  status            text not null default 'scheduled' check (status in ('scheduled', 'cancelled'))
+);
+
 create table if not exists public.elo_settings (
   id                        integer primary key default 1 check (id = 1),
   weights                   jsonb not null,
@@ -126,9 +173,10 @@ create table if not exists public.elo_profile (
 create table if not exists public.elo_accounts (
   email         text primary key,
   auth_user_id  text,
-  role          text not null check (role in ('student', 'monitor', 'coordinator')),
+  role          text not null check (role in ('student', 'monitor', 'coordinator', 'teacher')),
   student_id    text references public.elo_students(id) on delete cascade,
   monitor_id    text references public.elo_monitors(id) on delete cascade,
+  teacher_id    text references public.elo_teachers(id) on delete cascade,
   created_at    timestamptz not null default now()
 );
 
@@ -136,6 +184,8 @@ create index if not exists elo_requests_status_idx on public.elo_requests (statu
 create index if not exists elo_requests_created_idx on public.elo_requests (created_at desc);
 create index if not exists elo_sessions_starts_idx on public.elo_sessions (starts_at desc);
 create index if not exists elo_sessions_monitor_idx on public.elo_sessions (monitor_id);
+create index if not exists elo_alignment_messages_topic_idx on public.elo_alignment_messages (topic_id, created_at);
+create index if not exists elo_alignment_meetings_topic_idx on public.elo_alignment_meetings (topic_id, scheduled_at);
 create index if not exists elo_accounts_auth_uid_idx on public.elo_accounts (auth_user_id);
 
 alter table public.elo_meta enable row level security;
@@ -147,6 +197,10 @@ alter table public.elo_monitor_availability enable row level security;
 alter table public.elo_requests enable row level security;
 alter table public.elo_request_preferred enable row level security;
 alter table public.elo_sessions enable row level security;
+alter table public.elo_teachers enable row level security;
+alter table public.elo_teacher_topics enable row level security;
+alter table public.elo_alignment_messages enable row level security;
+alter table public.elo_alignment_meetings enable row level security;
 alter table public.elo_settings enable row level security;
 alter table public.elo_profile enable row level security;
 alter table public.elo_accounts enable row level security;

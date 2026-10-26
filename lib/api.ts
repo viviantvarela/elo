@@ -5,6 +5,9 @@ import { useUi } from "@/store/ui";
 
 import type {
   AccentKey,
+  AlignmentAuthorRole,
+  AlignmentMeeting,
+  AlignmentMessage,
   DashboardSummary,
   DemoProfile,
   HelpRequest,
@@ -18,15 +21,10 @@ import type {
   Settings,
   Slot,
   Student,
+  Teacher,
   Topic,
   Urgency,
 } from "./types";
-
-/**
- * Camada de acesso a dados (cliente). Toda chamada vai para as rotas em
- * `app/api`, enviando automaticamente o Bearer token do Supabase Auth (quando
- * logado) ou o cabeçalho de ator no modo demonstração.
- */
 
 export class ApiError extends Error {
   status: number;
@@ -61,6 +59,9 @@ async function buildAuthHeaders(): Promise<Record<string, string>> {
     }
     if (state.role === "monitor") {
       return { "x-elo-actor": state.monitorId ? `monitor:${state.monitorId}` : "monitor" };
+    }
+    if (state.role === "teacher") {
+      return { "x-elo-actor": state.teacherId ? `teacher:${state.teacherId}` : "teacher" };
     }
     return { "x-elo-actor": "coordinator" };
   }
@@ -135,7 +136,13 @@ export interface PeoplePayload {
   coordinator: DemoProfile;
   students: Student[];
   monitors: Monitor[];
+  teachers: Teacher[];
   topics: Topic[];
+}
+
+export interface AlignmentPayload {
+  messages: AlignmentMessage[];
+  meetings: AlignmentMeeting[];
 }
 
 export interface AuthSyncResponse {
@@ -144,6 +151,7 @@ export interface AuthSyncResponse {
     role: Role;
     studentId?: string;
     monitorId?: string;
+    teacherId?: string;
     email?: string;
   };
 }
@@ -155,6 +163,7 @@ export type StudentPatch = Partial<Pick<Student, "name" | "className" | "course"
 export type MonitorPatch = Partial<
   Pick<Monitor, "name" | "className" | "bio" | "online" | "availability" | "topics" | "kind" | "capacityHours" | "email">
 >;
+export type TeacherPatch = Partial<Pick<Teacher, "name" | "className" | "email" | "bio">>;
 
 export interface CreateMonitorPayload {
   name: string;
@@ -271,6 +280,26 @@ export const api = {
     request<Topic>("/api/topics", { method: "POST", body: JSON.stringify(payload) }),
   deleteTopic: (id: string) =>
     request<{ ok: boolean }>(`/api/topics?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /* ------------------------------ professores ----------------------------- */
+  listTeachers: () => request<Teacher[]>("/api/teachers"),
+  updateTeacher: (id: string, patch: TeacherPatch) =>
+    request<Teacher>("/api/teachers", { method: "PATCH", body: JSON.stringify({ id, ...patch }) }),
+
+  /* --------------------------- espaço de alinhamento ----------------------- */
+  getAlignment: () => request<AlignmentPayload>("/api/alignment"),
+  sendAlignmentMessage: (payload: { topicId: string; authorRole: AlignmentAuthorRole; authorId: string; text: string }) =>
+    request<{ message: AlignmentMessage }>("/api/alignment", { method: "POST", body: JSON.stringify(payload) }),
+  scheduleAlignmentMeeting: (payload: {
+    topicId: string;
+    authorRole: AlignmentAuthorRole;
+    authorId: string;
+    title: string;
+    scheduledAt: string;
+    durationMinutes: number;
+  }) => request<{ meeting: AlignmentMeeting }>("/api/alignment/meetings", { method: "POST", body: JSON.stringify(payload) }),
+  cancelAlignmentMeeting: (payload: { id: string; authorRole: AlignmentAuthorRole; authorId: string }) =>
+    request<{ meeting: AlignmentMeeting }>("/api/alignment/meetings", { method: "PATCH", body: JSON.stringify(payload) }),
 
   /* ------------------------------- relatórios ---------------------------- */
   getReports: () => request<ReportPayload>("/api/reports"),

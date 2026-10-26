@@ -6,7 +6,7 @@ import { useEffect, useMemo } from "react";
 import { api, type PeoplePayload } from "@/lib/api";
 import { monitorKindLabels, roleLabels } from "@/lib/constants";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
-import type { DemoProfile, HelpRequest, Monitor, PastelKey, Role, Session, Student } from "@/lib/types";
+import type { DemoProfile, HelpRequest, Monitor, PastelKey, Role, Session, Student, Teacher } from "@/lib/types";
 import { useUi } from "@/store/ui";
 
 /**
@@ -18,7 +18,7 @@ export interface CurrentUser {
   email?: string;
   role: Role;
   roleLabel: string;
-  /** id do registro: estudante, monitor ou conta da coordenação */
+  /** id do registro: estudante, monitor, professor ou conta da coordenação */
   id: string;
   /** nome cadastrado — vazio enquanto a coordenação não preencher o perfil */
   name: string;
@@ -32,6 +32,7 @@ export interface CurrentUser {
   incomplete: boolean;
   student: Student | null;
   monitor: Monitor | null;
+  teacher: Teacher | null;
   coordinator: DemoProfile | null;
 }
 
@@ -61,6 +62,7 @@ function fromStudent(student: Student, authMode: "supabase" | "demo", email?: st
     incomplete: false,
     student,
     monitor: null,
+    teacher: null,
     coordinator: null,
   };
 }
@@ -80,6 +82,27 @@ function fromMonitor(monitor: Monitor, authMode: "supabase" | "demo", email?: st
     incomplete: false,
     student: null,
     monitor,
+    teacher: null,
+    coordinator: null,
+  };
+}
+
+function fromTeacher(teacher: Teacher, authMode: "supabase" | "demo", email?: string | null): CurrentUser {
+  return {
+    authMode,
+    email: email ?? (teacher.email || undefined),
+    role: "teacher",
+    roleLabel: roleLabels.teacher,
+    id: teacher.id,
+    name: teacher.name,
+    displayName: teacher.name,
+    firstName: firstName(teacher.name),
+    detail: teacher.className,
+    color: teacher.color,
+    incomplete: false,
+    student: null,
+    monitor: null,
+    teacher,
     coordinator: null,
   };
 }
@@ -100,6 +123,7 @@ function fromCoordinator(profile: DemoProfile, authMode: "supabase" | "demo", em
     incomplete: !name,
     student: null,
     monitor: null,
+    teacher: null,
     coordinator: profile,
   };
 }
@@ -111,6 +135,7 @@ export function resolveCurrentUser(
   role: Role,
   studentId: string | null,
   monitorId: string | null,
+  teacherId: string | null,
 ): CurrentUser | null {
   if (!people) return null;
 
@@ -122,6 +147,11 @@ export function resolveCurrentUser(
   if (role === "monitor") {
     const monitor = people.monitors.find((entry) => entry.id === monitorId) ?? people.monitors[0];
     if (monitor) return fromMonitor(monitor, authMode, authEmail);
+  }
+
+  if (role === "teacher") {
+    const teacher = people.teachers.find((entry) => entry.id === teacherId) ?? people.teachers[0];
+    if (teacher) return fromTeacher(teacher, authMode, authEmail);
   }
 
   return fromCoordinator(people.coordinator, authMode, authEmail);
@@ -151,6 +181,7 @@ export function useSupabaseAuthSync() {
           role: actor.role,
           studentId: actor.studentId ?? null,
           monitorId: actor.monitorId ?? null,
+          teacherId: actor.teacherId ?? null,
         });
         void queryClient.invalidateQueries();
       } catch {
@@ -192,6 +223,7 @@ export function useCurrentUser() {
   const role = useUi((state) => state.role);
   const studentId = useUi((state) => state.studentId);
   const monitorId = useUi((state) => state.monitorId);
+  const teacherId = useUi((state) => state.teacherId);
   const hydrated = useUi((state) => state.hydrated);
 
   const signedOut = hydrated && authMode === "signed_out";
@@ -213,9 +245,10 @@ export function useCurrentUser() {
             role,
             studentId,
             monitorId,
+            teacherId,
           )
         : null,
-    [hydrated, signedOut, people.data, authMode, authEmail, role, studentId, monitorId],
+    [hydrated, signedOut, people.data, authMode, authEmail, role, studentId, monitorId, teacherId],
   );
 
   return {
@@ -226,6 +259,16 @@ export function useCurrentUser() {
     isError: !signedOut && people.isError && !people.data,
     retry: people.refetch,
   };
+}
+
+/* --------------------------- espaço de alinhamento ------------------------- */
+
+/** Tópicos do Espaço de alinhamento que o usuário atual pode ver (professor leciona / monitor atende). */
+export function alignmentTopicIds(user: CurrentUser | null): string[] {
+  if (!user) return [];
+  if (user.role === "teacher") return user.teacher?.topics ?? [];
+  if (user.role === "monitor") return user.monitor?.topics.map((entry) => entry.topicId) ?? [];
+  return [];
 }
 
 /* ------------------------------ visibilidade ------------------------------ */
@@ -259,24 +302,18 @@ export function requestPermissions(request: HelpRequest, user: CurrentUser | nul
     request.status === "open" || request.status === "matched" || request.status === "scheduled";
 
   return {
-    /** escolher qualquer monitor do ranking */
     pairAny: coordinator && request.status === "open",
-    /** monitor assume o pedido (se estiver no ranking) */
     accept: user?.role === "monitor" && request.status === "open",
-    /** agendar (ou remarcar / editar local de pedido já agendado) */
     schedule:
       (coordinator || assigned) &&
       (request.status === "open" || request.status === "matched" || request.status === "scheduled") &&
       Boolean(request.monitorId),
     register: (coordinator || assigned) && request.status === "scheduled",
-    /** cancelar pedido antes de ser concluído */
     cancel: (coordinator || owner) && activeOrScheduled,
-    /** desfaz o pareamento/agendamento e devolve o pedido à fila */
     release: (coordinator || assigned) && (request.status === "matched" || request.status === "scheduled"),
     reopen: coordinator
       ? request.status === "cancelled" || request.status === "done"
       : owner && request.status === "cancelled",
-    /** estudante avalia o próprio atendimento concluído */
     rate: (owner || coordinator) && request.status === "done",
   };
 }

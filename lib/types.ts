@@ -14,7 +14,7 @@ export type PastelKey = "peach" | "blue" | "sage" | "sand" | "lilac";
  * Papel de quem está usando o Elo: autenticado via Supabase Auth ou escolhido
  * no modo demonstração (ver `lib/current-user.ts`).
  */
-export type Role = "student" | "monitor" | "coordinator";
+export type Role = "student" | "monitor" | "coordinator" | "teacher";
 
 /* ------------------------------- catálogo -------------------------------- */
 
@@ -71,6 +71,22 @@ export interface Monitor {
   bio: string;
   /** e-mail institucional vinculado (opcional na semente) */
   email?: string;
+}
+
+/**
+ * Professor responsável por um ou mais componentes curriculares. Participa,
+ * junto com os monitores do mesmo tópico, do Espaço de alinhamento.
+ */
+export interface Teacher {
+  id: string;
+  name: string;
+  /** componente(s)/disciplina que leciona, em texto livre ("Matemática I") */
+  className: string;
+  email: string;
+  /** tópicos lecionados — define com quais monitores o professor se alinha */
+  topics: string[];
+  color: PastelKey;
+  bio: string;
 }
 
 /* --------------------------------- pedidos -------------------------------- */
@@ -206,6 +222,45 @@ export interface Settings {
   retentionDays: number;
 }
 
+/* --------------------------- espaço de alinhamento ------------------------- */
+
+/** quem escreveu a mensagem ou marcou a reunião — só professor(a) e monitor(a) */
+export type AlignmentAuthorRole = "teacher" | "monitor";
+
+/**
+ * Conversa entre o professor de um componente e os monitores daquele tópico,
+ * para alinhar mudanças na aula. Fora do alcance de estudantes e coordenação.
+ */
+export interface AlignmentMessage {
+  id: string;
+  topicId: string;
+  authorRole: AlignmentAuthorRole;
+  authorId: string;
+  authorName: string;
+  authorColor: PastelKey;
+  text: string;
+  createdAt: string;
+}
+
+/** como o link da reunião foi obtido */
+export type MeetProvider = "google-meet-api" | "demo";
+
+export interface AlignmentMeeting {
+  id: string;
+  topicId: string;
+  title: string;
+  scheduledAt: string;
+  durationMinutes: number;
+  meetLink: string;
+  meetCode: string;
+  provider: MeetProvider;
+  createdByRole: AlignmentAuthorRole;
+  createdById: string;
+  createdByName: string;
+  createdAt: string;
+  status: "scheduled" | "cancelled";
+}
+
 /**
  * Conta da coordenação. Começa em branco (sem pessoa fictícia) e é preenchida
  * em Configurações → Meu perfil ou ao autenticar como coordenação.
@@ -228,5 +283,6 @@ export interface AccountLink {
   role: Role;
   studentId?: string;
   monitorId?: string;
+  teacherId?: string;
   createdAt: string;
 }

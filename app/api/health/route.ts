@@ -20,8 +20,11 @@ export async function GET() {
         topics: db.topics.length,
         students: db.students.length,
         monitors: db.monitors.length,
+        teachers: db.teachers.length,
         requests: db.requests.length,
         sessions: db.sessions.length,
+        alignmentMessages: db.alignmentMessages.length,
+        alignmentMeetings: db.alignmentMeetings.length,
         accounts: db.accounts.length,
       },
     });

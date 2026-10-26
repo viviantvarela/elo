@@ -33,7 +33,7 @@ export async function GET(request: Request) {
 
 /**
  * Sincroniza um usuário autenticado no Supabase Auth com o cadastro do Elo:
- *  - Se já existir vínculo em `elo_accounts` (ou por e-mail em perfil/monitores/estudantes), reutiliza
+ *  - Se já existir vínculo em `elo_accounts` (ou por e-mail em perfil/professores/monitores/estudantes), reutiliza
  *  - Se for novo cadastro institucional, cria o registro correspondente e salva o vínculo
  */
 export async function POST(request: Request) {
@@ -56,8 +56,9 @@ export async function POST(request: Request) {
     const rawClass = cleanText(body.className ?? meta.className, 60);
     const rawCourse = cleanText(body.course ?? meta.course, 60);
     const rawCampus = cleanText(body.campus ?? meta.campus, 80);
+    const rawDesired = body.desiredRole ?? meta.desiredRole;
     const desiredRole: Role =
-      body.desiredRole === "coordinator" || meta.desiredRole === "coordinator" ? "coordinator" : "student";
+      rawDesired === "coordinator" ? "coordinator" : rawDesired === "teacher" ? "teacher" : "student";
 
     if (!existingActor && !isInstitutionalEmail(email)) {
       return forbidden("Use seu e-mail institucional do IFRN (@escolar.ifrn.edu.br ou @ifrn.edu.br).");
@@ -66,7 +67,28 @@ export async function POST(request: Request) {
     const db = await updateDb((draft) => {
       const nowIso = new Date().toISOString();
 
-      // 1) Se já existe monitor com este e-mail, garante vínculo em `accounts`
+      // 1) Se já existe professor com este e-mail, garante vínculo em `accounts`
+      const existingTeacher = draft.teachers.find((t) => t.email?.toLowerCase() === email);
+      if (existingTeacher) {
+        if (rawName && !existingTeacher.name) existingTeacher.name = rawName;
+        const acc = draft.accounts.find((a) => a.email.toLowerCase() === email);
+        if (acc) {
+          acc.authUserId = authUser.id;
+          acc.role = "teacher";
+          acc.teacherId = existingTeacher.id;
+        } else {
+          draft.accounts.push({
+            email,
+            authUserId: authUser.id,
+            role: "teacher",
+            teacherId: existingTeacher.id,
+            createdAt: nowIso,
+          });
+        }
+        return;
+      }
+
+      // 2) Se já existe monitor com este e-mail, garante vínculo em `accounts`
       const monitor = draft.monitors.find((m) => m.email?.toLowerCase() === email);
       if (monitor) {
         if (rawName && !monitor.name) monitor.name = rawName;
@@ -87,12 +109,12 @@ export async function POST(request: Request) {
         return;
       }
 
-      // 2) Conta da coordenação: se o e-mail já é da coordenação OU se não há
-      //    coordenador cadastrado ainda e o usuário é servidor (@ifrn.edu.br)
       const isStaffDomain = email.endsWith("@ifrn.edu.br") && !email.endsWith("@escolar.ifrn.edu.br");
       const hasCoordinator =
         Boolean(draft.profile.email) || draft.accounts.some((a) => a.role === "coordinator");
 
+      // 3) Conta da coordenação: se o e-mail já é da coordenação OU se não há
+      //    coordenador cadastrado ainda e o usuário é servidor (@ifrn.edu.br)
       if (
         draft.profile.email?.toLowerCase() === email ||
         draft.accounts.some((a) => a.email.toLowerCase() === email && a.role === "coordinator") ||
@@ -118,7 +140,36 @@ export async function POST(request: Request) {
         return;
       }
 
-      // 3) Estudante: vincula existente pelo e-mail ou cria registro novo
+      // 4) Novo professor (@ifrn.edu.br escolhendo perfil Professor(a))
+      if (desiredRole === "teacher" && isStaffDomain) {
+        const fallbackName = email
+          .split("@")[0]
+          .split(/[._-]+/)
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" ");
+
+        const newTeacher = {
+          id: nextId("t", draft.teachers),
+          name: rawName || fallbackName || "Docente IFRN",
+          className: rawClass || "Docente IFRN",
+          email,
+          topics: [] as string[],
+          color: sanitizePastel(["sage", "lilac", "blue", "sand", "peach"][draft.teachers.length % 5]),
+          bio: "",
+        };
+        draft.teachers.push(newTeacher);
+        draft.accounts.push({
+          email,
+          authUserId: authUser.id,
+          role: "teacher",
+          teacherId: newTeacher.id,
+          createdAt: nowIso,
+        });
+        return;
+      }
+
+      // 5) Estudante: vincula existente pelo e-mail ou cria registro novo
       let student = draft.students.find(
         (s) =>
           s.email?.toLowerCase() === email ||

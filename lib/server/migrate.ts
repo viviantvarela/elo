@@ -15,6 +15,10 @@ export function migrate(database: Database): Database {
   if (!Array.isArray(database.accounts)) {
     database.accounts = [];
   }
+  // bases gravadas antes do Espaço de alinhamento (professor ↔ monitor) não têm estas listas
+  if (!Array.isArray(database.teachers)) database.teachers = [];
+  if (!Array.isArray(database.alignmentMessages)) database.alignmentMessages = [];
+  if (!Array.isArray(database.alignmentMeetings)) database.alignmentMeetings = [];
 
   if (!database.profile) {
     database.profile = blankCoordinatorProfile();
