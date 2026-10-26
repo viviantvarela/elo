@@ -38,6 +38,9 @@ export function SessionRow({
         <p className="truncate text-[13px] font-medium text-ink">{topic?.name ?? "Atendimento"}</p>
         <p className="truncate text-[11.5px] text-ink-soft">
           com {person?.name ?? "monitor"} · {session.minutes} min
+          {session.location
+            ? ` · ${/^https?:\/\//i.test(session.location) ? "sala remota" : session.location}`
+            : ""}
         </p>
       </div>
       {onComplete && past && !href ? (

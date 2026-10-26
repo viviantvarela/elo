@@ -3,14 +3,16 @@ import "server-only";
 import { buildSeed, type Database } from "../seed";
 
 /**
- * Store Postgres (Neon).
+ * Store Postgres (Supabase / Neon / PostgreSQL).
  *
  * Expõe a mesma interface do store em arquivo (`readDb`/`updateDb`/`resetDb`)
  * para que `lib/server/repository.ts` e todas as rotas de API não saibam qual
  * driver está por baixo.
  *
- * Recebe um `Queryable` em vez de criar o pool: assim o mesmo código roda no
- * Neon (via `pg`), em qualquer Postgres e nos testes com PGlite.
+ * Quando usado com `pg.Pool`, `withTransaction` aloca um único `PoolClient`
+ * do início ao fim da transação (`BEGIN` → `pg_advisory_xact_lock` → leitura →
+ * mutação → escrita → `COMMIT`), evitando intercalação entre conexões do pool
+ * e evitando updates perdidos em requisições simultâneas.
  */
 
 export interface QueryResult<T> {
@@ -19,6 +21,7 @@ export interface QueryResult<T> {
 
 export interface Queryable {
   query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
+  withTransaction?: <R>(fn: (tx: Queryable) => Promise<R>) => Promise<R>;
 }
 
 /* ------------------------------- DDL -------------------------------------- */
@@ -27,23 +30,28 @@ const DDL_STATEMENTS = [
   `create table if not exists elo_meta (
     id integer primary key default 1 check (id = 1),
     created_at timestamptz not null default now(),
-    version integer not null default 1
+    version integer not null default 2
   )`,
   `create table if not exists elo_topics (
     id text primary key, name text not null, component text not null, color text not null
   )`,
   `create table if not exists elo_students (
     id text primary key, name text not null, class_name text not null,
-    course text not null, color text not null, guardian_consent boolean not null default false
+    course text not null, color text not null, guardian_consent boolean not null default false,
+    email text, consent_accepted_at timestamptz
   )`,
+  `alter table elo_students add column if not exists email text`,
+  `alter table elo_students add column if not exists consent_accepted_at timestamptz`,
   `create table if not exists elo_monitors (
     id text primary key, name text not null, class_name text not null,
     kind text not null check (kind in ('bolsista','voluntario')),
     rating double precision not null default 0, rating_count integer not null default 0,
     sessions integer not null default 0, weekly_hours double precision not null default 0,
     capacity_hours double precision not null default 0, color text not null,
-    online boolean not null default false, bio text not null default ''
+    online boolean not null default false, bio text not null default '',
+    email text
   )`,
+  `alter table elo_monitors add column if not exists email text`,
   `create table if not exists elo_monitor_topics (
     monitor_id text not null references elo_monitors(id) on delete cascade,
     topic_id text not null references elo_topics(id) on delete cascade,
@@ -80,8 +88,9 @@ const DDL_STATEMENTS = [
     topic_id text not null references elo_topics(id) on delete cascade,
     starts_at timestamptz not null, minutes integer not null check (minutes > 0),
     attendance text not null check (attendance in ('present','absent')),
-    rating integer check (rating between 1 and 5), notes text
+    rating integer check (rating between 1 and 5), notes text, location text
   )`,
+  `alter table elo_sessions add column if not exists location text`,
   `create table if not exists elo_settings (
     id integer primary key default 1 check (id = 1),
     weights jsonb not null,
@@ -96,10 +105,19 @@ const DDL_STATEMENTS = [
     class_name text not null default '', email text not null default '',
     campus text not null default '', coordinator_view boolean not null default true
   )`,
+  `create table if not exists elo_accounts (
+    email text primary key,
+    auth_user_id text,
+    role text not null check (role in ('student','monitor','coordinator')),
+    student_id text references elo_students(id) on delete cascade,
+    monitor_id text references elo_monitors(id) on delete cascade,
+    created_at timestamptz not null default now()
+  )`,
   `create index if not exists elo_requests_status_idx on elo_requests (status)`,
   `create index if not exists elo_requests_created_idx on elo_requests (created_at desc)`,
   `create index if not exists elo_sessions_starts_idx on elo_sessions (starts_at desc)`,
   `create index if not exists elo_sessions_monitor_idx on elo_sessions (monitor_id)`,
+  `create index if not exists elo_accounts_auth_uid_idx on elo_accounts (auth_user_id)`,
 ];
 
 /* ------------------------------- leitura ---------------------------------- */
@@ -117,6 +135,8 @@ interface StudentRow {
   course: string;
   color: string;
   guardian_consent: boolean;
+  email: string | null;
+  consent_accepted_at: Date | string | null;
 }
 interface MonitorRow {
   id: string;
@@ -131,6 +151,7 @@ interface MonitorRow {
   color: string;
   online: boolean;
   bio: string;
+  email: string | null;
 }
 interface MonitorTopicRow {
   monitor_id: string;
@@ -173,6 +194,15 @@ interface SessionRow {
   attendance: "present" | "absent";
   rating: number | null;
   notes: string | null;
+  location: string | null;
+}
+interface AccountRow {
+  email: string;
+  auth_user_id: string | null;
+  role: "student" | "monitor" | "coordinator";
+  student_id: string | null;
+  monitor_id: string | null;
+  created_at: Date | string;
 }
 interface SettingsRow {
   weights: { topic: number; availability: number; rating: number; load: number };
@@ -219,22 +249,29 @@ function group<T, K>(rows: T[], key: (row: T) => K): Map<K, T[]> {
 export function createPostgresStore(queryable: Queryable) {
   let schemaReady: Promise<void> | null = null;
 
+  async function inTransaction<R>(fn: (tx: Queryable) => Promise<R>): Promise<R> {
+    if (queryable.withTransaction) {
+      return queryable.withTransaction(fn);
+    }
+    await queryable.query("begin");
+    try {
+      const result = await fn(queryable);
+      await queryable.query("commit");
+      return result;
+    } catch (error) {
+      await queryable.query("rollback").catch(() => undefined);
+      throw error;
+    }
+  }
+
   async function ensureSchema() {
     if (!schemaReady) {
-      schemaReady = (async () => {
-        // duas lambdas podem subir juntas no primeiro acesso: serializa o DDL
-        await queryable.query("begin");
-        try {
-          await queryable.query("select pg_advisory_xact_lock(hashtext('elo-schema'))");
-          for (const statement of DDL_STATEMENTS) {
-            await queryable.query(statement);
-          }
-          await queryable.query("commit");
-        } catch (error) {
-          await queryable.query("rollback").catch(() => undefined);
-          throw error;
+      schemaReady = inTransaction(async (tx) => {
+        await tx.query("select pg_advisory_xact_lock(hashtext('elo-schema'))");
+        for (const statement of DDL_STATEMENTS) {
+          await tx.query(statement);
         }
-      })().catch((error) => {
+      }).catch((error) => {
         schemaReady = null;
         throw error;
       });
@@ -242,197 +279,276 @@ export function createPostgresStore(queryable: Queryable) {
     return schemaReady;
   }
 
-  async function isEmpty() {
-    const { rows } = await queryable.query<{ count: string }>("select count(*)::text as count from elo_topics");
+  async function isEmpty(q: Queryable = queryable) {
+    const { rows } = await q.query<{ count: string }>("select count(*)::text as count from elo_topics");
     return Number(rows[0]?.count ?? "0") === 0;
   }
 
   /* ------------------------------ escrita -------------------------------- */
 
-  async function writeSnapshot(database: Database) {
-    await queryable.query("begin");
-    try {
-      // serializa concorrência entre lambdas do Vercel
-      await queryable.query("select pg_advisory_xact_lock(hashtext('elo-workspace'))");
+  async function writeSnapshotRows(tx: Queryable, database: Database) {
+    await tx.query(
+      "delete from elo_accounts; delete from elo_request_preferred; delete from elo_monitor_availability; delete from elo_monitor_topics; delete from elo_sessions; delete from elo_requests; delete from elo_monitors; delete from elo_students; delete from elo_topics;",
+    );
 
-      await queryable.query(
-        "delete from elo_request_preferred; delete from elo_monitor_availability; delete from elo_monitor_topics; delete from elo_sessions; delete from elo_requests; delete from elo_monitors; delete from elo_students; delete from elo_topics;",
-      );
+    for (const topic of database.topics) {
+      await tx.query("insert into elo_topics (id, name, component, color) values ($1,$2,$3,$4)", [
+        topic.id,
+        topic.name,
+        topic.component,
+        topic.color,
+      ]);
+    }
 
-      for (const topic of database.topics) {
-        await queryable.query("insert into elo_topics (id, name, component, color) values ($1,$2,$3,$4)", [
-          topic.id,
-          topic.name,
-          topic.component,
-          topic.color,
-        ]);
-      }
-
-      for (const student of database.students) {
-        await queryable.query(
-          "insert into elo_students (id, name, class_name, course, color, guardian_consent) values ($1,$2,$3,$4,$5,$6)",
-          [student.id, student.name, student.className, student.course, student.color, student.guardianConsent],
-        );
-      }
-
-      for (const monitor of database.monitors) {
-        await queryable.query(
-          `insert into elo_monitors
-            (id, name, class_name, kind, rating, rating_count, sessions, weekly_hours, capacity_hours, color, online, bio)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [
-            monitor.id,
-            monitor.name,
-            monitor.className,
-            monitor.kind,
-            monitor.rating,
-            monitor.ratingCount,
-            monitor.sessions,
-            monitor.weeklyHours,
-            monitor.capacityHours,
-            monitor.color,
-            monitor.online,
-            monitor.bio,
-          ],
-        );
-
-        for (const topic of monitor.topics) {
-          await queryable.query(
-            "insert into elo_monitor_topics (monitor_id, topic_id, level) values ($1,$2,$3)",
-            [monitor.id, topic.topicId, topic.level],
-          );
-        }
-
-        for (const slot of monitor.availability) {
-          await queryable.query(
-            "insert into elo_monitor_availability (monitor_id, day, start_min, end_min) values ($1,$2,$3,$4)",
-            [monitor.id, slot.day, slot.start, slot.end],
-          );
-        }
-      }
-
-      for (const request of database.requests) {
-        await queryable.query(
-          `insert into elo_requests
-            (id, student_id, topic_id, note, urgency, status, created_at, monitor_id, matched_at, session_id, closed_at)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [
-            request.id,
-            request.studentId,
-            request.topicId,
-            request.note,
-            request.urgency,
-            request.status,
-            request.createdAt,
-            request.monitorId ?? null,
-            request.matchedAt ?? null,
-            request.sessionId ?? null,
-            request.closedAt ?? null,
-          ],
-        );
-
-        for (const slot of request.preferred) {
-          await queryable.query(
-            "insert into elo_request_preferred (request_id, day, start_min, end_min) values ($1,$2,$3,$4)",
-            [request.id, slot.day, slot.start, slot.end],
-          );
-        }
-      }
-
-      for (const session of database.sessions) {
-        await queryable.query(
-          `insert into elo_sessions
-            (id, request_id, monitor_id, student_id, topic_id, starts_at, minutes, attendance, rating, notes)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [
-            session.id,
-            session.requestId,
-            session.monitorId,
-            session.studentId,
-            session.topicId,
-            session.startsAt,
-            session.minutes,
-            session.attendance,
-            session.rating ?? null,
-            session.notes ?? null,
-          ],
-        );
-      }
-
-      const settings = database.settings;
-      await queryable.query(
-        `insert into elo_settings
-          (id, weights, role, accent, theme, consent_required, guardian_consent_required, aggregate_only, retention_days)
-         values (1,$1,$2,$3,$4,$5,$6,$7,$8)
-         on conflict (id) do update set
-           weights = excluded.weights, role = excluded.role, accent = excluded.accent, theme = excluded.theme,
-           consent_required = excluded.consent_required,
-           guardian_consent_required = excluded.guardian_consent_required,
-           aggregate_only = excluded.aggregate_only, retention_days = excluded.retention_days`,
+    for (const student of database.students) {
+      await tx.query(
+        "insert into elo_students (id, name, class_name, course, color, guardian_consent, email, consent_accepted_at) values ($1,$2,$3,$4,$5,$6,$7,$8)",
         [
-          JSON.stringify(settings.weights),
-          settings.role,
-          settings.accent,
-          settings.theme,
-          settings.consentRequired,
-          settings.guardianConsentRequired,
-          settings.aggregateOnly,
-          settings.retentionDays,
+          student.id,
+          student.name,
+          student.className,
+          student.course,
+          student.color,
+          student.guardianConsent,
+          student.email ?? null,
+          student.consentAcceptedAt ?? null,
+        ],
+      );
+    }
+
+    for (const monitor of database.monitors) {
+      await tx.query(
+        `insert into elo_monitors
+          (id, name, class_name, kind, rating, rating_count, sessions, weekly_hours, capacity_hours, color, online, bio, email)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          monitor.id,
+          monitor.name,
+          monitor.className,
+          monitor.kind,
+          monitor.rating,
+          monitor.ratingCount,
+          monitor.sessions,
+          monitor.weeklyHours,
+          monitor.capacityHours,
+          monitor.color,
+          monitor.online,
+          monitor.bio,
+          monitor.email ?? null,
         ],
       );
 
-      const profile = database.profile;
-      await queryable.query(
-        `insert into elo_profile (id, name, role, class_name, email, campus, coordinator_view)
-         values (1,$1,$2,$3,$4,$5,$6)
-         on conflict (id) do update set
-           name = excluded.name, role = excluded.role, class_name = excluded.class_name,
-           email = excluded.email, campus = excluded.campus, coordinator_view = excluded.coordinator_view`,
-        [profile.name, profile.role, profile.className, profile.email, profile.campus, profile.coordinatorView],
-      );
+      for (const topic of monitor.topics) {
+        await tx.query(
+          "insert into elo_monitor_topics (monitor_id, topic_id, level) values ($1,$2,$3)",
+          [monitor.id, topic.topicId, topic.level],
+        );
+      }
 
-      await queryable.query(
-        `insert into elo_meta (id, created_at, version) values (1,$1,$2)
-         on conflict (id) do update set created_at = excluded.created_at, version = excluded.version`,
-        [database.meta.createdAt, database.meta.version],
-      );
-
-      await queryable.query("commit");
-    } catch (error) {
-      await queryable.query("rollback").catch(() => undefined);
-      throw error;
+      for (const slot of monitor.availability) {
+        await tx.query(
+          "insert into elo_monitor_availability (monitor_id, day, start_min, end_min) values ($1,$2,$3,$4)",
+          [monitor.id, slot.day, slot.start, slot.end],
+        );
+      }
     }
+
+    for (const request of database.requests) {
+      await tx.query(
+        `insert into elo_requests
+          (id, student_id, topic_id, note, urgency, status, created_at, monitor_id, matched_at, session_id, closed_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          request.id,
+          request.studentId,
+          request.topicId,
+          request.note,
+          request.urgency,
+          request.status,
+          request.createdAt,
+          request.monitorId ?? null,
+          request.matchedAt ?? null,
+          request.sessionId ?? null,
+          request.closedAt ?? null,
+        ],
+      );
+
+      for (const slot of request.preferred) {
+        await tx.query(
+          "insert into elo_request_preferred (request_id, day, start_min, end_min) values ($1,$2,$3,$4)",
+          [request.id, slot.day, slot.start, slot.end],
+        );
+      }
+    }
+
+    for (const session of database.sessions) {
+      await tx.query(
+        `insert into elo_sessions
+          (id, request_id, monitor_id, student_id, topic_id, starts_at, minutes, attendance, rating, notes, location)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          session.id,
+          session.requestId,
+          session.monitorId,
+          session.studentId,
+          session.topicId,
+          session.startsAt,
+          session.minutes,
+          session.attendance,
+          session.rating ?? null,
+          session.notes ?? null,
+          session.location ?? null,
+        ],
+      );
+    }
+
+    for (const account of database.accounts ?? []) {
+      await tx.query(
+        `insert into elo_accounts (email, auth_user_id, role, student_id, monitor_id, created_at)
+         values ($1,$2,$3,$4,$5,$6)`,
+        [
+          account.email.toLowerCase(),
+          account.authUserId ?? null,
+          account.role,
+          account.studentId ?? null,
+          account.monitorId ?? null,
+          account.createdAt,
+        ],
+      );
+    }
+
+    const settings = database.settings;
+    await tx.query(
+      `insert into elo_settings
+        (id, weights, role, accent, theme, consent_required, guardian_consent_required, aggregate_only, retention_days)
+       values (1,$1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (id) do update set
+         weights = excluded.weights, role = excluded.role, accent = excluded.accent, theme = excluded.theme,
+         consent_required = excluded.consent_required,
+         guardian_consent_required = excluded.guardian_consent_required,
+         aggregate_only = excluded.aggregate_only, retention_days = excluded.retention_days`,
+      [
+        JSON.stringify(settings.weights),
+        settings.role,
+        settings.accent,
+        settings.theme,
+        settings.consentRequired,
+        settings.guardianConsentRequired,
+        settings.aggregateOnly,
+        settings.retentionDays,
+      ],
+    );
+
+    const profile = database.profile;
+    await tx.query(
+      `insert into elo_profile (id, name, role, class_name, email, campus, coordinator_view)
+       values (1,$1,$2,$3,$4,$5,$6)
+       on conflict (id) do update set
+         name = excluded.name, role = excluded.role, class_name = excluded.class_name,
+         email = excluded.email, campus = excluded.campus, coordinator_view = excluded.coordinator_view`,
+      [profile.name, profile.role, profile.className, profile.email, profile.campus, profile.coordinatorView],
+    );
+
+    await tx.query(
+      `insert into elo_meta (id, created_at, version) values (1,$1,$2)
+       on conflict (id) do update set created_at = excluded.created_at, version = excluded.version`,
+      [database.meta.createdAt, database.meta.version],
+    );
+  }
+
+  async function writeSnapshot(database: Database) {
+    await inTransaction(async (tx) => {
+      await tx.query("select pg_advisory_xact_lock(hashtext('elo-workspace'))");
+      await writeSnapshotRows(tx, database);
+    });
   }
 
   /* ------------------------------- leitura ------------------------------- */
 
-  async function loadSnapshot(): Promise<Database> {
-    const [topics, students, monitors, monitorTopics, availability, requests, preferred, sessions, settingsRows, profileRows, metaRows] =
-      await Promise.all([
-        queryable.query<TopicRow>("select id, name, component, color from elo_topics order by id"),
-        queryable.query<StudentRow>("select id, name, class_name, course, color, guardian_consent from elo_students order by id"),
-        queryable.query<MonitorRow>(
-          "select id, name, class_name, kind, rating, rating_count, sessions, weekly_hours, capacity_hours, color, online, bio from elo_monitors order by id",
+  async function loadSnapshot(q: Queryable = queryable): Promise<Database> {
+    // Quando `q` é um PoolClient dedicado dentro de uma transação, executamos
+    // sequencialmente no mesmo cliente; no pool geral podemos paralelizar.
+    const sequential = q !== queryable;
+
+    const runAll = async () => {
+      if (sequential) {
+        const topics = await q.query<TopicRow>("select id, name, component, color from elo_topics order by id");
+        const students = await q.query<StudentRow>(
+          "select id, name, class_name, course, color, guardian_consent, email, consent_accepted_at from elo_students order by id",
+        );
+        const monitors = await q.query<MonitorRow>(
+          "select id, name, class_name, kind, rating, rating_count, sessions, weekly_hours, capacity_hours, color, online, bio, email from elo_monitors order by id",
+        );
+        const monitorTopics = await q.query<MonitorTopicRow>("select monitor_id, topic_id, level from elo_monitor_topics");
+        const availability = await q.query<AvailabilityRow>(
+          "select monitor_id, day, start_min, end_min from elo_monitor_availability order by day, start_min",
+        );
+        const requests = await q.query<RequestRow>(
+          `select id, student_id, topic_id, note, urgency, status, created_at, monitor_id, matched_at, session_id, closed_at
+           from elo_requests order by created_at desc`,
+        );
+        const preferred = await q.query<PreferredRow>(
+          "select request_id, day, start_min, end_min from elo_request_preferred order by day, start_min",
+        );
+        const sessions = await q.query<SessionRow>(
+          `select id, request_id, monitor_id, student_id, topic_id, starts_at, minutes, attendance, rating, notes, location
+           from elo_sessions order by starts_at desc`,
+        );
+        const accounts = await q.query<AccountRow>(
+          "select email, auth_user_id, role, student_id, monitor_id, created_at from elo_accounts order by created_at asc",
+        );
+        const settingsRows = await q.query<SettingsRow>("select * from elo_settings where id = 1");
+        const profileRows = await q.query<ProfileRow>("select * from elo_profile where id = 1");
+        const metaRows = await q.query<MetaRow>("select created_at, version from elo_meta where id = 1");
+        return [topics, students, monitors, monitorTopics, availability, requests, preferred, sessions, accounts, settingsRows, profileRows, metaRows] as const;
+      }
+
+      return Promise.all([
+        q.query<TopicRow>("select id, name, component, color from elo_topics order by id"),
+        q.query<StudentRow>(
+          "select id, name, class_name, course, color, guardian_consent, email, consent_accepted_at from elo_students order by id",
         ),
-        queryable.query<MonitorTopicRow>("select monitor_id, topic_id, level from elo_monitor_topics"),
-        queryable.query<AvailabilityRow>(
+        q.query<MonitorRow>(
+          "select id, name, class_name, kind, rating, rating_count, sessions, weekly_hours, capacity_hours, color, online, bio, email from elo_monitors order by id",
+        ),
+        q.query<MonitorTopicRow>("select monitor_id, topic_id, level from elo_monitor_topics"),
+        q.query<AvailabilityRow>(
           "select monitor_id, day, start_min, end_min from elo_monitor_availability order by day, start_min",
         ),
-        queryable.query<RequestRow>(
+        q.query<RequestRow>(
           `select id, student_id, topic_id, note, urgency, status, created_at, monitor_id, matched_at, session_id, closed_at
            from elo_requests order by created_at desc`,
         ),
-        queryable.query<PreferredRow>(
+        q.query<PreferredRow>(
           "select request_id, day, start_min, end_min from elo_request_preferred order by day, start_min",
         ),
-        queryable.query<SessionRow>(
-          `select id, request_id, monitor_id, student_id, topic_id, starts_at, minutes, attendance, rating, notes
+        q.query<SessionRow>(
+          `select id, request_id, monitor_id, student_id, topic_id, starts_at, minutes, attendance, rating, notes, location
            from elo_sessions order by starts_at desc`,
         ),
-        queryable.query<SettingsRow>("select * from elo_settings where id = 1"),
-        queryable.query<ProfileRow>("select * from elo_profile where id = 1"),
-        queryable.query<MetaRow>("select created_at, version from elo_meta where id = 1"),
+        q.query<AccountRow>(
+          "select email, auth_user_id, role, student_id, monitor_id, created_at from elo_accounts order by created_at asc",
+        ),
+        q.query<SettingsRow>("select * from elo_settings where id = 1"),
+        q.query<ProfileRow>("select * from elo_profile where id = 1"),
+        q.query<MetaRow>("select created_at, version from elo_meta where id = 1"),
       ]);
+    };
+
+    const [
+      topics,
+      students,
+      monitors,
+      monitorTopics,
+      availability,
+      requests,
+      preferred,
+      sessions,
+      accounts,
+      settingsRows,
+      profileRows,
+      metaRows,
+    ] = await runAll();
 
     const topicsByMonitor = group(monitorTopics.rows, (row) => row.monitor_id);
     const slotsByMonitor = group(availability.rows, (row) => row.monitor_id);
@@ -456,6 +572,8 @@ export function createPostgresStore(queryable: Queryable) {
         course: row.course,
         color: row.color as Database["students"][number]["color"],
         guardianConsent: row.guardian_consent,
+        email: row.email ?? undefined,
+        consentAcceptedAt: iso(row.consent_accepted_at),
       })),
       monitors: monitors.rows.map((row) => ({
         id: row.id,
@@ -476,6 +594,7 @@ export function createPostgresStore(queryable: Queryable) {
         color: row.color as Database["monitors"][number]["color"],
         online: row.online,
         bio: row.bio,
+        email: row.email ?? undefined,
       })),
       requests: requests.rows.map((row) => ({
         id: row.id,
@@ -506,6 +625,15 @@ export function createPostgresStore(queryable: Queryable) {
         attendance: row.attendance,
         rating: row.rating ?? undefined,
         notes: row.notes ?? undefined,
+        location: row.location ?? undefined,
+      })),
+      accounts: accounts.rows.map((row) => ({
+        email: row.email,
+        authUserId: row.auth_user_id ?? undefined,
+        role: row.role,
+        studentId: row.student_id ?? undefined,
+        monitorId: row.monitor_id ?? undefined,
+        createdAt: iso(row.created_at) as string,
       })),
       settings: {
         weights: settingsRow.weights as Database["settings"]["weights"],
@@ -528,7 +656,7 @@ export function createPostgresStore(queryable: Queryable) {
       },
       meta: {
         createdAt: iso(metaRows.rows[0]?.created_at) ?? new Date().toISOString(),
-        version: metaRows.rows[0]?.version ?? 1,
+        version: metaRows.rows[0]?.version ?? 2,
       },
     };
   }
@@ -538,20 +666,29 @@ export function createPostgresStore(queryable: Queryable) {
   async function readDb(): Promise<Database> {
     await ensureSchema();
     if (await isEmpty()) {
-      const seeded = buildSeed();
-      await writeSnapshot(seeded);
-      return seeded;
+      return inTransaction(async (tx) => {
+        await tx.query("select pg_advisory_xact_lock(hashtext('elo-workspace'))");
+        if (await isEmpty(tx)) {
+          const seeded = buildSeed();
+          await writeSnapshotRows(tx, seeded);
+          return seeded;
+        }
+        return loadSnapshot(tx);
+      });
     }
     return loadSnapshot();
   }
 
   async function updateDb(mutator: (database: Database) => Database | void): Promise<Database> {
-    const current = await readDb();
-    const draft = structuredClone(current);
-    const next = mutator(draft) ?? draft;
     await ensureSchema();
-    await writeSnapshot(next);
-    return next;
+    return inTransaction(async (tx) => {
+      await tx.query("select pg_advisory_xact_lock(hashtext('elo-workspace'))");
+      const current = (await isEmpty(tx)) ? buildSeed() : await loadSnapshot(tx);
+      const draft = structuredClone(current);
+      const next = mutator(draft) ?? draft;
+      await writeSnapshotRows(tx, next);
+      return next;
+    });
   }
 
   async function resetDb(seed: Database = buildSeed()): Promise<Database> {

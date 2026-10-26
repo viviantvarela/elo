@@ -11,8 +11,8 @@ export type AccentKey = "green" | "ocean" | "plum" | "rose" | "amber";
 export type PastelKey = "peach" | "blue" | "sage" | "sand" | "lilac";
 
 /**
- * Papel de quem está usando o Elo. Ainda não há login: o usuário é escolhido
- * no menu do topo e vale para o navegador (ver `lib/current-user.ts`).
+ * Papel de quem está usando o Elo: autenticado via Supabase Auth ou escolhido
+ * no modo demonstração (ver `lib/current-user.ts`).
  */
 export type Role = "student" | "monitor" | "coordinator";
 
@@ -26,7 +26,7 @@ export interface Topic {
   color: PastelKey;
 }
 
-/** janela de disponibilidade: dia da semana (1=seg … 5=sex) + minutos do dia */
+/** janela de disponibilidade: dia da semana (1=seg … 6=sáb) + minutos do dia */
 export interface Slot {
   day: number;
   start: number;
@@ -43,6 +43,10 @@ export interface Student {
   color: PastelKey;
   /** autorização de responsável registrada (menores de 18) */
   guardianConsent: boolean;
+  /** e-mail institucional vinculado (opcional na semente) */
+  email?: string;
+  /** data/hora em que aceitou o termo de consentimento LGPD */
+  consentAcceptedAt?: string;
 }
 
 export type MonitorKind = "bolsista" | "voluntario";
@@ -65,6 +69,8 @@ export interface Monitor {
   color: PastelKey;
   online: boolean;
   bio: string;
+  /** e-mail institucional vinculado (opcional na semente) */
+  email?: string;
 }
 
 /* --------------------------------- pedidos -------------------------------- */
@@ -102,6 +108,8 @@ export interface Session {
   /** 1..5 — avaliação do atendimento pelo estudante */
   rating?: number;
   notes?: string;
+  /** sala/espaço físico no campus ou link de chamada online */
+  location?: string;
 }
 
 /* ------------------------------ pareamento -------------------------------- */
@@ -163,6 +171,11 @@ export interface DashboardSummary {
   students: Student[];
   topics: Topic[];
   alerts: { id: string; tone: "danger" | "warn" | "info"; title: string; detail: string }[];
+  privacy: {
+    consentRequired: boolean;
+    guardianConsentRequired: boolean;
+    aggregateOnly: boolean;
+  };
 }
 
 export interface ReportPayload {
@@ -195,7 +208,7 @@ export interface Settings {
 
 /**
  * Conta da coordenação. Começa em branco (sem pessoa fictícia) e é preenchida
- * em Configurações → Meu perfil.
+ * em Configurações → Meu perfil ou ao autenticar como coordenação.
  */
 export interface DemoProfile {
   id: string;
@@ -206,4 +219,14 @@ export interface DemoProfile {
   email: string;
   campus: string;
   coordinatorView: boolean;
+}
+
+/** Vínculo entre uma conta autenticada (Supabase Auth) e o registro no Elo. */
+export interface AccountLink {
+  email: string;
+  authUserId?: string;
+  role: Role;
+  studentId?: string;
+  monitorId?: string;
+  createdAt: string;
 }

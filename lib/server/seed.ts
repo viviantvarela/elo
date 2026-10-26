@@ -1,4 +1,5 @@
 import type {
+  AccountLink,
   DemoProfile,
   HelpRequest,
   Monitor,
@@ -14,6 +15,7 @@ export interface Database {
   monitors: Monitor[];
   requests: HelpRequest[];
   sessions: Session[];
+  accounts: AccountLink[];
   settings: Settings;
   profile: DemoProfile;
   meta: { createdAt: string; version: number };
@@ -41,20 +43,20 @@ const topics: Topic[] = [
   { id: "hist", name: "História", component: "História I", color: "peach" },
 ];
 
-const students: Student[] = [
-  { id: "a1", name: "Ana Beatriz Lima", className: "1º ano INFO", course: "Informática", color: "peach", guardianConsent: true },
-  { id: "a2", name: "Caio Ferreira", className: "1º ano INFO", course: "Informática", color: "blue", guardianConsent: true },
-  { id: "a3", name: "Maria Eduarda Souza", className: "1º ano INFO", course: "Informática", color: "sage", guardianConsent: true },
-  { id: "a4", name: "João Pedro Alves", className: "1º ano INFO", course: "Informática", color: "sand", guardianConsent: true },
-  { id: "a5", name: "Larissa Nunes", className: "1º ano INFO", course: "Informática", color: "lilac", guardianConsent: true },
+const studentsSeed: Student[] = [
+  { id: "a1", name: "Ana Beatriz Lima", className: "1º ano INFO", course: "Informática", color: "peach", guardianConsent: true, email: "ana.lima@escolar.ifrn.edu.br" },
+  { id: "a2", name: "Caio Ferreira", className: "1º ano INFO", course: "Informática", color: "blue", guardianConsent: true, email: "caio.ferreira@escolar.ifrn.edu.br" },
+  { id: "a3", name: "Maria Eduarda Souza", className: "1º ano INFO", course: "Informática", color: "sage", guardianConsent: true, email: "eduarda.souza@escolar.ifrn.edu.br" },
+  { id: "a4", name: "João Pedro Alves", className: "1º ano INFO", course: "Informática", color: "sand", guardianConsent: true, email: "joao.alves@escolar.ifrn.edu.br" },
+  { id: "a5", name: "Larissa Nunes", className: "1º ano INFO", course: "Informática", color: "lilac", guardianConsent: true, email: "larissa.nunes@escolar.ifrn.edu.br" },
   { id: "a6", name: "Gabriel Moreira", className: "2º ano INFO", course: "Informática", color: "blue", guardianConsent: false },
   { id: "a7", name: "Beatriz Cavalcanti", className: "2º ano INFO", course: "Informática", color: "peach", guardianConsent: false },
   { id: "a8", name: "Ryan Silva", className: "2º ano INFO", course: "Informática", color: "sage", guardianConsent: false },
   { id: "a9", name: "Sofia Martins", className: "2º ano INFO", course: "Informática", color: "sand", guardianConsent: false },
   { id: "a10", name: "Pedro Henrique Rocha", className: "3º ano MEC", course: "Mecatrônica", color: "lilac", guardianConsent: false },
   { id: "a11", name: "Alice Barbosa", className: "3º ano MEC", course: "Mecatrônica", color: "peach", guardianConsent: false },
-  { id: "a12", name: "Miguel Araújo", className: "1º ano MEC", course: "Mecatrônica", color: "blue", guardianConsent: true },
-  { id: "a13", name: "Isabela Freitas", className: "1º ano MEC", course: "Mecatrônica", color: "sage", guardianConsent: true },
+  { id: "a12", name: "Miguel Araújo", className: "1º ano MEC", course: "Mecatrônica", color: "blue", guardianConsent: true, email: "miguel.araujo@escolar.ifrn.edu.br" },
+  { id: "a13", name: "Isabela Freitas", className: "1º ano MEC", course: "Mecatrônica", color: "sage", guardianConsent: true, email: "isabela.freitas@escolar.ifrn.edu.br" },
   { id: "a14", name: "Lucas Dantas", className: "2º ano MEC", course: "Mecatrônica", color: "sand", guardianConsent: false },
   { id: "a15", name: "Valentina Costa", className: "2º ano MEC", course: "Mecatrônica", color: "lilac", guardianConsent: false },
   { id: "a16", name: "Enzo Carvalho", className: "1º ano MEC", course: "Mecatrônica", color: "peach", guardianConsent: true },
@@ -77,6 +79,12 @@ const S = {
   sexInicio: { day: 5, start: 13 * 60, end: 15 * 60 },
 } as const;
 
+const locations = [
+  "Biblioteca — Mesa de estudos",
+  "Lab de Informática 1",
+  "Sala de Monitoria",
+] as const;
+
 const monitors: Monitor[] = [
   {
     id: "m1",
@@ -96,6 +104,7 @@ const monitors: Monitor[] = [
     color: "sage",
     online: true,
     bio: "Monitora de Matemática desde o 2º ano. Gosta de resolver exercício junto, no quadro.",
+    email: "helena.prado@escolar.ifrn.edu.br",
   },
   {
     id: "m2",
@@ -115,6 +124,7 @@ const monitors: Monitor[] = [
     color: "lilac",
     online: true,
     bio: "Ajuda em lógica e estruturas de repetição. Prefere exemplos com código curto.",
+    email: "arthur.bezerra@escolar.ifrn.edu.br",
   },
   {
     id: "m3",
@@ -134,6 +144,7 @@ const monitors: Monitor[] = [
     color: "peach",
     online: false,
     bio: "Foca em interpretação de texto e estrutura da redação do integrado.",
+    email: "clara.menezes@escolar.ifrn.edu.br",
   },
   {
     id: "m4",
@@ -153,6 +164,7 @@ const monitors: Monitor[] = [
     color: "blue",
     online: true,
     bio: "Explica cinemática com gráficos feitos à mão. Agenda cheia nas quintas.",
+    email: "davi.lustosa@escolar.ifrn.edu.br",
   },
   {
     id: "m5",
@@ -169,6 +181,7 @@ const monitors: Monitor[] = [
     color: "sand",
     online: false,
     bio: "Única monitora de Química com nível avançado no campus.",
+    email: "manuella.rocha@escolar.ifrn.edu.br",
   },
   {
     id: "m6",
@@ -183,11 +196,12 @@ const monitors: Monitor[] = [
     rating: 4.9,
     ratingCount: 25,
     sessions: 21,
-    weeklyHours: 6,
+    weeklyHours: 7,
     capacityHours: 8,
     color: "sage",
     online: true,
     bio: "Atende em grupo quando o assunto é o mesmo. Bom em funções e progressões.",
+    email: "vinicius.tavares@escolar.ifrn.edu.br",
   },
   {
     id: "m7",
@@ -207,6 +221,7 @@ const monitors: Monitor[] = [
     color: "peach",
     online: true,
     bio: "Trabalha produção textual e também quebra galho em Python.",
+    email: "cecilia.amorim@escolar.ifrn.edu.br",
   },
   {
     id: "m8",
@@ -221,11 +236,12 @@ const monitors: Monitor[] = [
     rating: 4.3,
     ratingCount: 5,
     sessions: 6,
-    weeklyHours: 5,
+    weeklyHours: 5.5,
     capacityHours: 6,
     color: "lilac",
     online: false,
     bio: "Monitor novo no projeto, entrou no segundo ciclo do piloto.",
+    email: "otavio.nascimento@escolar.ifrn.edu.br",
   },
 ];
 
@@ -276,6 +292,18 @@ const requestSeeds: RequestSeed[] = [
   [12, "hist", 2, 15, [S.sexTarde], "low", "open", "Preciso organizar a linha do tempo do Brasil Império."],
 ];
 
+/** Próxima ocorrência futura de `day` (1=seg … 6=sáb) no horário do slot. */
+function nextWeekdayOccurrence(from: Date, day: number, startMinutes: number) {
+  const target = new Date(from);
+  const diff = (day - from.getDay() + 7) % 7;
+  target.setDate(target.getDate() + diff);
+  target.setHours(Math.floor(startMinutes / 60), startMinutes % 60, 0, 0);
+  if (target.getTime() <= from.getTime()) {
+    target.setDate(target.getDate() + 7);
+  }
+  return target;
+}
+
 export function buildSeed(now = new Date()): Database {
   const rand = mulberry32(20261018);
 
@@ -286,6 +314,7 @@ export function buildSeed(now = new Date()): Database {
     return date;
   };
 
+  const students: Student[] = structuredClone(studentsSeed);
   const requests: HelpRequest[] = [];
   const sessions: Session[] = [];
   let sessionSeq = 0;
@@ -293,10 +322,15 @@ export function buildSeed(now = new Date()): Database {
   requestSeeds.forEach((seed, index) => {
     const [studentIdx, topicId, daysAgo, hour, preferred, urgency, status, note] = seed;
     const createdAt = at(daysAgo, hour, Math.floor(rand() * 50));
+    const student = students[studentIdx];
+
+    if (!student.consentAcceptedAt || createdAt.toISOString() < student.consentAcceptedAt) {
+      student.consentAcceptedAt = createdAt.toISOString();
+    }
 
     const request: HelpRequest = {
       id: `r${String(index + 1).padStart(2, "0")}`,
-      studentId: students[studentIdx].id,
+      studentId: student.id,
       topicId,
       note,
       urgency,
@@ -320,29 +354,45 @@ export function buildSeed(now = new Date()): Database {
 
       if (status === "done" || status === "scheduled") {
         const slot = preferred[0];
-        const sessionDate = new Date(matchedAt);
+        let sessionDate = new Date(matchedAt);
         const daysForward = 1 + Math.floor(rand() * 3);
         sessionDate.setDate(sessionDate.getDate() + daysForward);
-        if (status === "scheduled") {
-          // sessões futuras: sempre à frente de "agora"
-          const target = new Date(now);
-          target.setDate(target.getDate() + 1 + Math.floor(rand() * 4));
-          sessionDate.setTime(target.getTime());
-        }
+        // garante dia útil (seg–sex) para sessões passadas
+        if (sessionDate.getDay() === 0) sessionDate.setDate(sessionDate.getDate() + 1);
+        if (sessionDate.getDay() === 6) sessionDate.setDate(sessionDate.getDate() - 1);
         sessionDate.setHours(Math.floor(slot.start / 60), slot.start % 60, 0, 0);
 
+        if (status === "scheduled") {
+          // sessões futuras: caem sempre no dia útil real da janela escolhida
+          rand(); // mantém sequência determinística do PRNG
+          sessionDate = nextWeekdayOccurrence(now, slot.day, slot.start);
+        }
+
         const minutes = [45, 50, 60, 60, 75, 90][Math.floor(rand() * 6)];
+        const location = locations[index % locations.length];
         const session: Session = {
           id: `s${++sessionSeq}`,
           requestId: request.id,
           monitorId: monitor.id,
-          studentId: students[studentIdx].id,
+          studentId: student.id,
           topicId,
           startsAt: sessionDate.toISOString(),
           minutes,
           attendance: "present",
-          rating: status === "done" ? (rand() < 0.14 ? 3 : rand() < 0.55 ? 4 : 5) : undefined,
+          // deixa o último atendimento concluído da Ana Beatriz (r19/r17) sem nota
+          // para demonstrar a avaliação feita pelo próprio estudante
+          rating:
+            status === "done"
+              ? index === 16
+                ? undefined
+                : rand() < 0.14
+                  ? 3
+                  : rand() < 0.55
+                    ? 4
+                    : 5
+              : undefined,
           notes: status === "done" ? "Atendimento registrado pelo monitor ao final da sessão." : undefined,
+          location,
         };
         sessions.push(session);
         request.sessionId = session.id;
@@ -360,6 +410,8 @@ export function buildSeed(now = new Date()): Database {
     const topic = monitor.topics[0].topicId;
     const daysAgo = Math.floor(rand() * 46);
     const start = at(daysAgo, 13 + Math.floor(rand() * 6), 0);
+    if (start.getDay() === 0) start.setDate(start.getDate() - 2);
+    if (start.getDay() === 6) start.setDate(start.getDate() - 1);
     sessions.push({
       id: `s${++sessionSeq}`,
       requestId: `legacy-${i}`,
@@ -371,6 +423,7 @@ export function buildSeed(now = new Date()): Database {
       attendance: "present",
       rating: rand() < 0.12 ? 3 : rand() < 0.5 ? 4 : 5,
       notes: "Sessão importada do registro manual do piloto.",
+      location: locations[i % locations.length],
     });
   }
 
@@ -386,14 +439,15 @@ export function buildSeed(now = new Date()): Database {
   };
 
   return {
-    topics,
+    topics: structuredClone(topics),
     students,
-    monitors,
+    monitors: structuredClone(monitors),
     requests,
     sessions,
+    accounts: [],
     settings,
     profile: blankCoordinatorProfile(),
-    meta: { createdAt: now.toISOString(), version: 1 },
+    meta: { createdAt: now.toISOString(), version: 2 },
   };
 }
 

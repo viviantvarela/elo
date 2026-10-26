@@ -19,7 +19,6 @@ type FilterValue = "all" | RequestStatus;
 
 const normalize = (value: string) => value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 
-/** A seleção vive na URL (?id=): links do painel abrem o pedido certo e voltar/avançar funciona. */
 function selectInUrl(id: string) {
   window.history.replaceState(null, "", `/pedidos?id=${encodeURIComponent(id)}`);
 }
@@ -40,13 +39,11 @@ function PedidosView() {
   const [filter, setFilter] = useState<FilterValue>("all");
   const [query, setQuery] = useState("");
   const [newOpen, setNewOpen] = useState(false);
-  // pedido recém-criado: fica selecionado enquanto a lista recarrega
   const [pendingId, setPendingId] = useState<string | null>(null);
 
   const role = user?.role ?? "coordinator";
   const identity = user ? `${user.role}:${user.id}` : "";
 
-  // cada usuário começa com a lista inteira
   useEffect(() => {
     setFilter("all");
     setQuery("");
@@ -66,7 +63,6 @@ function PedidosView() {
       return;
     }
     if (requestedId && visibleIds.has(requestedId)) return;
-    // sem seleção válida para este usuário: o primeiro aberto (ou o mais recente)
     const fallback = visible.find((request) => request.status === "open") ?? visible[0];
     if (fallback) selectInUrl(fallback.id);
   }, [data, user, pendingId, requestedId, visible, visibleIds]);
@@ -78,6 +74,7 @@ function PedidosView() {
       matched: visible.filter((request) => request.status === "matched").length,
       scheduled: visible.filter((request) => request.status === "scheduled").length,
       done: visible.filter((request) => request.status === "done").length,
+      cancelled: visible.filter((request) => request.status === "cancelled").length,
     }),
     [visible],
   );
@@ -105,13 +102,13 @@ function PedidosView() {
       ? {
           eyebrow: "Sua ajuda",
           title: "Meus pedidos",
-          subtitle: "Acompanhe seus pedidos de ajuda: quem vai te atender, quando, e o que já foi resolvido.",
+          subtitle: "Acompanhe seus pedidos de ajuda: quem vai te atender, quando, onde e avalie os concluídos.",
         }
       : role === "monitor"
         ? {
             eyebrow: "Sua fila",
             title: "Pedidos para você",
-            subtitle: `Pedidos abertos nos tópicos que você atende${monitorTopics ? ` (${monitorTopics})` : ""} e os que já são seus. Aceite, combine o horário e registre o atendimento.`,
+            subtitle: `Pedidos abertos nos tópicos que você atende${monitorTopics ? ` (${monitorTopics})` : ""} e os que já são seus. Aceite, combine o horário/sala e registre o atendimento.`,
           }
         : {
             eyebrow: "Fila de pareamento",
@@ -163,6 +160,7 @@ function PedidosView() {
                     { value: "matched", label: `Pareando ${counts.matched}` },
                     { value: "scheduled", label: `Agendados ${counts.scheduled}` },
                     { value: "done", label: `Concluídos ${counts.done}` },
+                    { value: "cancelled", label: `Cancelados ${counts.cancelled}` },
                   ]}
                 />
               </div>

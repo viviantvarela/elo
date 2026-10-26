@@ -1,12 +1,14 @@
 import { matchHours, rankMonitors, slaBucket } from "../pairing";
 import type {
   DashboardSummary,
+  DemoProfile,
   HelpRequest,
   Indicator,
   Match,
+  Monitor,
   ReportPayload,
+  Session,
   Settings,
-  DemoProfile,
 } from "../types";
 import type { Database } from "./seed";
 
@@ -37,6 +39,16 @@ function canServe(db: Database, topicId: string) {
   );
 }
 
+/**
+ * Uma sessão só conta como atendimento efetivamente concluído quando não está
+ * vinculada a um pedido ainda em aberto/agendado (sessões legadas importadas
+ * sem pedido em `db.requests` já são históricas e contam normalmente).
+ */
+export function isSessionCompleted(requestsById: Map<string, HelpRequest>, session: Session) {
+  const linked = requestsById.get(session.requestId);
+  return !linked || linked.status === "done";
+}
+
 /* --------------------------------- pedidos -------------------------------- */
 
 export function listRequests(db: Database) {
@@ -56,6 +68,8 @@ export function matchesFor(db: Database, request: HelpRequest): Match[] {
 export function getDashboard(db: Database, now = new Date()): DashboardSummary {
   const requests = db.requests;
   const sessions = db.sessions;
+  const requestsById = new Map(requests.map((r) => [r.id, r]));
+  const completedSessions = sessions.filter((s) => isSessionCompleted(requestsById, s));
 
   const open = requests.filter((request) => request.status === "open").length;
   const matched = requests.filter((request) => request.status === "matched").length;
@@ -67,13 +81,13 @@ export function getDashboard(db: Database, now = new Date()): DashboardSummary {
   const matchTimes = paired.map((request) => matchHours(request, +now));
 
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const hoursThisMonth = sessions
+  const hoursThisMonth = completedSessions
     .filter((session) => new Date(session.startsAt) >= monthStart && new Date(session.startsAt) <= now)
     // falta não vira hora de monitoria
     .reduce((sum, session) => sum + (session.attendance === "absent" ? 0 : session.minutes), 0);
 
   const reachStudents = new Set(requests.map((request) => request.studentId)).size;
-  const rated = sessions.filter((session) => typeof session.rating === "number");
+  const rated = completedSessions.filter((session) => typeof session.rating === "number");
   const satisfaction = rated.length
     ? rated.reduce((sum, session) => sum + (session.rating ?? 0), 0) / rated.length
     : 0;
@@ -91,9 +105,9 @@ export function getDashboard(db: Database, now = new Date()): DashboardSummary {
     previousEnd.setDate(previousEnd.getDate() + 7);
 
     const count = (from: Date, to: Date) =>
-      sessions.filter((session) => {
+      completedSessions.filter((session) => {
         const at = new Date(session.startsAt);
-        return at >= from && at < to;
+        return at >= from && at < to && session.attendance !== "absent";
       }).length;
 
     return {
@@ -113,7 +127,10 @@ export function getDashboard(db: Database, now = new Date()): DashboardSummary {
   });
 
   const upcoming = sessions
-    .filter((session) => new Date(session.startsAt) >= now)
+    .filter((session) => {
+      const req = requestsById.get(session.requestId);
+      return (!req || req.status === "scheduled") && new Date(session.startsAt) >= now;
+    })
     .sort((a, b) => +new Date(a.startsAt) - +new Date(b.startsAt))
     .slice(0, 5);
 
@@ -136,7 +153,9 @@ export function getDashboard(db: Database, now = new Date()): DashboardSummary {
     });
   }
 
-  const overloaded = db.monitors.filter((monitor) => monitor.weeklyHours / monitor.capacityHours >= 0.85);
+  const overloaded = db.monitors.filter(
+    (monitor) => monitor.capacityHours > 0 && monitor.weeklyHours / monitor.capacityHours >= 0.85,
+  );
   if (overloaded.length > 0) {
     alerts.push({
       id: "load",
@@ -178,18 +197,24 @@ export function getDashboard(db: Database, now = new Date()): DashboardSummary {
     students: db.students,
     topics: db.topics,
     alerts: alerts.slice(0, 3),
+    privacy: {
+      consentRequired: db.settings.consentRequired,
+      guardianConsentRequired: db.settings.guardianConsentRequired,
+      aggregateOnly: db.settings.aggregateOnly,
+    },
   };
 }
 
 /* -------------------------------- relatórios ------------------------------ */
 
 export function getReports(db: Database, now = new Date()): ReportPayload {
-  const sessions = db.sessions;
   const requests = db.requests;
+  const requestsById = new Map(requests.map((r) => [r.id, r]));
+  const completedSessions = db.sessions.filter((s) => isSessionCompleted(requestsById, s));
   const paired = requests.filter((request) => request.matchedAt);
 
-  const positive = sessions.filter((session) => (session.rating ?? 0) >= 4).length;
-  const rated = sessions.filter((session) => typeof session.rating === "number").length;
+  const positive = completedSessions.filter((session) => (session.rating ?? 0) >= 4).length;
+  const rated = completedSessions.filter((session) => typeof session.rating === "number").length;
   const positiveRate = rated ? positive / rated : 0;
   const within48 = paired.filter((request) => matchHours(request, +now) <= 48).length;
   const within48Rate = paired.length ? within48 / paired.length : 0;
@@ -248,11 +273,15 @@ export function getReports(db: Database, now = new Date()): ReportPayload {
 
   const hoursByMonitor = db.monitors
     .map((monitor) => {
-      const mine = sessions.filter((session) => session.monitorId === monitor.id);
-      const minutes = mine.reduce((sum, session) => sum + (session.attendance === "absent" ? 0 : session.minutes), 0);
-      const last = mine
-        .map((session) => session.startsAt)
-        .sort((a, b) => +new Date(b) - +new Date(a))[0] ?? null;
+      // só sessões já concluídas (e com presença) entram no relatório de horas
+      const mine = completedSessions.filter(
+        (session) => session.monitorId === monitor.id && session.attendance !== "absent",
+      );
+      const minutes = mine.reduce((sum, session) => sum + session.minutes, 0);
+      const last =
+        mine
+          .map((session) => session.startsAt)
+          .sort((a, b) => +new Date(b) - +new Date(a))[0] ?? null;
 
       return {
         monitorId: monitor.id,
@@ -291,7 +320,7 @@ export function getReports(db: Database, now = new Date()): ReportPayload {
 
   const satisfaction = [1, 2, 3, 4, 5].map((score) => ({
     score,
-    count: sessions.filter((session) => session.rating === score).length,
+    count: completedSessions.filter((session) => session.rating === score).length,
   }));
 
   return {
@@ -315,6 +344,47 @@ export function nextId(prefix: string, existing: { id: string }[]) {
 
 export function topicLabel(db: Database, topicId: string) {
   return topicName(db, topicId);
+}
+
+/** Soma horas/sessão/nota quando um atendimento é registrado como presente. */
+export function applyCompletedSessionToMonitor(monitor: Monitor, minutes: number, rating?: number) {
+  monitor.weeklyHours = Math.round((monitor.weeklyHours + minutes / 60) * 10) / 10;
+  monitor.sessions += 1;
+  if (rating !== undefined) {
+    const total = monitor.rating * monitor.ratingCount + rating;
+    monitor.ratingCount += 1;
+    monitor.rating = Math.round((total / monitor.ratingCount) * 100) / 100;
+  }
+}
+
+/** Estorna horas/sessão/nota quando um pedido concluído é reaberto pela coordenação. */
+export function revertCompletedSessionFromMonitor(monitor: Monitor, session: Session) {
+  if (session.attendance !== "present") return;
+  monitor.weeklyHours = Math.max(0, Math.round((monitor.weeklyHours - session.minutes / 60) * 10) / 10);
+  monitor.sessions = Math.max(0, monitor.sessions - 1);
+  if (session.rating !== undefined && monitor.ratingCount > 0) {
+    const remaining = monitor.ratingCount - 1;
+    if (remaining <= 0) {
+      monitor.ratingCount = 0;
+      monitor.rating = 0;
+    } else {
+      const total = Math.max(0, monitor.rating * monitor.ratingCount - session.rating);
+      monitor.ratingCount = remaining;
+      monitor.rating = Math.round((total / remaining) * 100) / 100;
+    }
+  }
+}
+
+/** Aplica ou substitui a nota de 1..5 dada pelo estudante após a sessão. */
+export function applySessionRatingToMonitor(monitor: Monitor, previousRating: number | undefined, nextRating: number) {
+  if (previousRating === undefined) {
+    const total = monitor.rating * monitor.ratingCount + nextRating;
+    monitor.ratingCount += 1;
+    monitor.rating = Math.round((total / monitor.ratingCount) * 100) / 100;
+  } else if (monitor.ratingCount > 0) {
+    const total = Math.max(0, monitor.rating * monitor.ratingCount - previousRating + nextRating);
+    monitor.rating = Math.round((total / monitor.ratingCount) * 100) / 100;
+  }
 }
 
 export type { Settings, DemoProfile };

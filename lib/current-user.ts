@@ -1,22 +1,21 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 
 import { api, type PeoplePayload } from "@/lib/api";
 import { monitorKindLabels, roleLabels } from "@/lib/constants";
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 import type { DemoProfile, HelpRequest, Monitor, PastelKey, Role, Session, Student } from "@/lib/types";
 import { useUi } from "@/store/ui";
 
 /**
- * Quem está usando o Elo agora.
- *
- * Sem login, a identidade é escolhida em "Trocar de usuário" e guardada no
- * navegador (`store/ui.ts`); os dados da pessoa vêm de `/api/people`. Quando a
- * tela de login chegar, só muda a origem da identidade — as telas continuam
- * lendo tudo daqui.
+ * Quem está usando o Elo agora: autenticado via Supabase Auth ou em modo
+ * demonstração (`store/ui.ts`).
  */
 export interface CurrentUser {
+  authMode: "supabase" | "demo";
+  email?: string;
   role: Role;
   roleLabel: string;
   /** id do registro: estudante, monitor ou conta da coordenação */
@@ -47,8 +46,10 @@ export function shortName(name: string) {
   return name.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
-function fromStudent(student: Student): CurrentUser {
+function fromStudent(student: Student, authMode: "supabase" | "demo", email?: string | null): CurrentUser {
   return {
+    authMode,
+    email: email ?? student.email,
     role: "student",
     roleLabel: roleLabels.student,
     id: student.id,
@@ -64,8 +65,10 @@ function fromStudent(student: Student): CurrentUser {
   };
 }
 
-function fromMonitor(monitor: Monitor): CurrentUser {
+function fromMonitor(monitor: Monitor, authMode: "supabase" | "demo", email?: string | null): CurrentUser {
   return {
+    authMode,
+    email: email ?? monitor.email,
     role: "monitor",
     roleLabel: roleLabels.monitor,
     id: monitor.id,
@@ -81,9 +84,11 @@ function fromMonitor(monitor: Monitor): CurrentUser {
   };
 }
 
-function fromCoordinator(profile: DemoProfile): CurrentUser {
+function fromCoordinator(profile: DemoProfile, authMode: "supabase" | "demo", email?: string | null): CurrentUser {
   const name = profile.name.trim();
   return {
+    authMode,
+    email: email ?? (profile.email || undefined),
     role: "coordinator",
     roleLabel: roleLabels.coordinator,
     id: profile.id,
@@ -101,6 +106,8 @@ function fromCoordinator(profile: DemoProfile): CurrentUser {
 
 export function resolveCurrentUser(
   people: PeoplePayload | undefined,
+  authMode: "supabase" | "demo",
+  authEmail: string | null,
   role: Role,
   studentId: string | null,
   monitorId: string | null,
@@ -108,47 +115,121 @@ export function resolveCurrentUser(
   if (!people) return null;
 
   if (role === "student") {
-    // id salvo que não existe mais (ex.: base restaurada) cai no primeiro da lista
     const student = people.students.find((entry) => entry.id === studentId) ?? people.students[0];
-    if (student) return fromStudent(student);
+    if (student) return fromStudent(student, authMode, authEmail);
   }
 
   if (role === "monitor") {
     const monitor = people.monitors.find((entry) => entry.id === monitorId) ?? people.monitors[0];
-    if (monitor) return fromMonitor(monitor);
+    if (monitor) return fromMonitor(monitor, authMode, authEmail);
   }
 
-  return fromCoordinator(people.coordinator);
+  return fromCoordinator(people.coordinator, authMode, authEmail);
+}
+
+/** Mantém a sessão do Supabase Auth sincronizada com `store/ui.ts` no navegador. */
+export function useSupabaseAuthSync() {
+  const queryClient = useQueryClient();
+  const hydrated = useUi((s) => s.hydrated);
+  const setSupabaseSession = useUi((s) => s.setSupabaseSession);
+  const signOutState = useUi((s) => s.signOutState);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const sb = getSupabaseBrowserClient();
+    if (!sb) return;
+
+    let active = true;
+
+    const syncToken = async (accessToken: string, email: string) => {
+      try {
+        const { actor } = await api.syncAuthAccount(accessToken);
+        if (!active) return;
+        setSupabaseSession({
+          email,
+          accessToken,
+          role: actor.role,
+          studentId: actor.studentId ?? null,
+          monitorId: actor.monitorId ?? null,
+        });
+        void queryClient.invalidateQueries();
+      } catch {
+        /* mantém o estado atual caso o e-mail não pertença ao domínio permitido */
+      }
+    };
+
+    void sb.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      const session = data.session;
+      if (session?.access_token && session.user?.email) {
+        void syncToken(session.access_token, session.user.email);
+      } else if (useUi.getState().authMode === "supabase") {
+        signOutState();
+      }
+    });
+
+    const { data: sub } = sb.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      if (event === "SIGNED_OUT") {
+        if (useUi.getState().authMode === "supabase") signOutState();
+        return;
+      }
+      if (session?.access_token && session.user?.email) {
+        void syncToken(session.access_token, session.user.email);
+      }
+    });
+
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [hydrated, queryClient, setSupabaseSession, signOutState]);
 }
 
 export function useCurrentUser() {
+  const authMode = useUi((state) => state.authMode);
+  const authEmail = useUi((state) => state.authEmail);
   const role = useUi((state) => state.role);
   const studentId = useUi((state) => state.studentId);
   const monitorId = useUi((state) => state.monitorId);
   const hydrated = useUi((state) => state.hydrated);
 
-  const people = useQuery({ queryKey: peopleQueryKey, queryFn: api.getPeople, staleTime: 60_000 });
+  const signedOut = hydrated && authMode === "signed_out";
+
+  const people = useQuery({
+    queryKey: peopleQueryKey,
+    queryFn: api.getPeople,
+    staleTime: 60_000,
+    enabled: hydrated && !signedOut,
+  });
 
   const user = useMemo(
-    () => (hydrated ? resolveCurrentUser(people.data, role, studentId, monitorId) : null),
-    [hydrated, people.data, role, studentId, monitorId],
+    () =>
+      hydrated && !signedOut
+        ? resolveCurrentUser(
+            people.data,
+            authMode === "supabase" ? "supabase" : "demo",
+            authEmail,
+            role,
+            studentId,
+            monitorId,
+          )
+        : null,
+    [hydrated, signedOut, people.data, authMode, authEmail, role, studentId, monitorId],
   );
 
   return {
     user,
+    signedOut,
     people: people.data,
-    isLoading: !hydrated || people.isLoading,
-    isError: people.isError && !people.data,
+    isLoading: !hydrated || (!signedOut && people.isLoading),
+    isError: !signedOut && people.isError && !people.data,
     retry: people.refetch,
   };
 }
 
 /* ------------------------------ visibilidade ------------------------------ */
 
-/**
- * Pedidos que cada usuário vê: o estudante, só os próprios; o monitor, os
- * abertos nos tópicos que domina e os que já são dele; a coordenação, todos.
- */
 export function visibleRequests(requests: HelpRequest[], user: CurrentUser | null) {
   if (!user) return [];
   if (user.role === "student") return requests.filter((request) => request.studentId === user.id);
@@ -161,7 +242,6 @@ export function visibleRequests(requests: HelpRequest[], user: CurrentUser | nul
   return requests;
 }
 
-/** Sessões de cada usuário: as próprias para estudante e monitor; todas para a coordenação. */
 export function visibleSessions(sessions: Session[], user: CurrentUser | null) {
   if (!user) return [];
   if (user.role === "student") return sessions.filter((session) => session.studentId === user.id);
@@ -171,28 +251,32 @@ export function visibleSessions(sessions: Session[], user: CurrentUser | null) {
 
 /* ------------------------------- permissões ------------------------------- */
 
-/**
- * O que o usuário pode fazer num pedido. Sem login ainda é só interface; quando
- * a autenticação chegar, as mesmas regras vão para as rotas de API.
- */
 export function requestPermissions(request: HelpRequest, user: CurrentUser | null) {
   const coordinator = user?.role === "coordinator";
   const owner = user?.role === "student" && request.studentId === user.id;
   const assigned = user?.role === "monitor" && request.monitorId === user.id;
-  const active = request.status === "open" || request.status === "matched";
+  const activeOrScheduled =
+    request.status === "open" || request.status === "matched" || request.status === "scheduled";
 
   return {
     /** escolher qualquer monitor do ranking */
     pairAny: coordinator && request.status === "open",
     /** monitor assume o pedido (se estiver no ranking) */
     accept: user?.role === "monitor" && request.status === "open",
-    schedule: (coordinator || assigned) && active && Boolean(request.monitorId),
+    /** agendar (ou remarcar / editar local de pedido já agendado) */
+    schedule:
+      (coordinator || assigned) &&
+      (request.status === "open" || request.status === "matched" || request.status === "scheduled") &&
+      Boolean(request.monitorId),
     register: (coordinator || assigned) && request.status === "scheduled",
-    cancel: (coordinator || owner) && active,
-    /** desfaz o pareamento e devolve o pedido à fila */
-    release: (coordinator || assigned) && request.status === "matched",
+    /** cancelar pedido antes de ser concluído */
+    cancel: (coordinator || owner) && activeOrScheduled,
+    /** desfaz o pareamento/agendamento e devolve o pedido à fila */
+    release: (coordinator || assigned) && (request.status === "matched" || request.status === "scheduled"),
     reopen: coordinator
       ? request.status === "cancelled" || request.status === "done"
       : owner && request.status === "cancelled",
+    /** estudante avalia o próprio atendimento concluído */
+    rate: (owner || coordinator) && request.status === "done",
   };
 }

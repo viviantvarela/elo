@@ -1,11 +1,11 @@
 import { ok, serverError } from "@/lib/server/http";
-import { readDb, usingPostgres } from "@/lib/server/db";
+import { activeDriver, readDb } from "@/lib/server/db";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Diagnóstico do deploy: confirma qual driver está ativo e se o banco responde.
- * Útil logo após configurar `DATABASE_URL` no Vercel.
+ * Diagnóstico do deploy: confirma qual driver está ativo (`supabase`, `postgres`
+ * ou `json`) e se o banco responde.
  */
 export async function GET() {
   const started = Date.now();
@@ -13,7 +13,8 @@ export async function GET() {
     const db = await readDb();
     return ok({
       ok: true,
-      driver: usingPostgres() ? "postgres" : "json",
+      driver: activeDriver(),
+      supabaseAuthConfigured: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
       latencyMs: Date.now() - started,
       counts: {
         topics: db.topics.length,
@@ -21,6 +22,7 @@ export async function GET() {
         monitors: db.monitors.length,
         requests: db.requests.length,
         sessions: db.sessions.length,
+        accounts: db.accounts.length,
       },
     });
   } catch (error) {

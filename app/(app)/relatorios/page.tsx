@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Download, FileText, Target, TrendingUp } from "lucide-react";
+import { Download, EyeOff, FileText, Target, TrendingUp } from "lucide-react";
 
 import { DistributionBars, HBars } from "@/components/charts";
 import { PageHeader } from "@/components/page-header";
@@ -27,6 +27,7 @@ function toCsv(rows: (string | number)[][]) {
 export default function RelatoriosPage() {
   const { user } = useCurrentUser();
   const { data, isLoading } = useQuery({ queryKey: ["reports"], queryFn: api.getReports });
+  const { data: settingsData } = useQuery({ queryKey: ["settings"], queryFn: api.getSettings });
 
   if (isLoading || !data) {
     return (
@@ -41,20 +42,37 @@ export default function RelatoriosPage() {
     );
   }
 
+  const aggregateOnly = Boolean(settingsData?.settings.aggregateOnly);
+  const displayMonitorName = (monitorId: string, realName: string, idx: number) => {
+    if (!aggregateOnly) return realName;
+    if (user?.role === "monitor" && user.id === monitorId) return realName;
+    return `Monitor #${idx + 1}`;
+  };
+
   const maxSla = Math.max(1, ...data.sla.map((item) => item.count));
   const maxSatisfaction = Math.max(1, ...data.satisfaction.map((item) => item.count));
   const totalMinutes = data.hoursByMonitor.reduce((sum, row) => sum + row.minutes, 0);
 
   const exportCsv = () => {
     const header = ["Monitor", "Sessões", "Minutos", "Horas", "Último registro"];
-    const rows = data.hoursByMonitor.map((row) => [
-      row.name,
+    const rows = data.hoursByMonitor.map((row, idx) => [
+      displayMonitorName(row.monitorId, row.name, idx),
       row.sessions,
       row.minutes,
       row.hours.toFixed(1).replace(".", ","),
       row.lastReportAt ? dateLabel(row.lastReportAt) : "—",
     ]);
-    const csv = toCsv([header, ...rows, ["Total", data.hoursByMonitor.reduce((s, r) => s + r.sessions, 0), totalMinutes, (totalMinutes / 60).toFixed(1).replace(".", ","), ""]]);
+    const csv = toCsv([
+      header,
+      ...rows,
+      [
+        "Total",
+        data.hoursByMonitor.reduce((s, r) => s + r.sessions, 0),
+        totalMinutes,
+        (totalMinutes / 60).toFixed(1).replace(".", ","),
+        "",
+      ],
+    ]);
     const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -69,11 +87,18 @@ export default function RelatoriosPage() {
       <PageHeader
         eyebrow="Metas do projeto · Parte 3"
         title="Relatórios do piloto"
-        subtitle="Os seis indicadores de referência, as horas por monitor e a demanda que não encontrou atendimento."
+        subtitle="Os seis indicadores de referência, as horas realizadas por monitor e a demanda que não encontrou atendimento."
         actions={
-          <Button variant="outline" onClick={exportCsv}>
-            <Download className="size-4" /> Exportar CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            {aggregateOnly ? (
+              <Chip tone="neutral">
+                <EyeOff className="size-3" /> Modo agregado (LGPD)
+              </Chip>
+            ) : null}
+            <Button variant="outline" onClick={exportCsv}>
+              <Download className="size-4" /> Exportar CSV
+            </Button>
+          </div>
         }
       />
 
@@ -113,8 +138,8 @@ export default function RelatoriosPage() {
       {/* -------------------------------- horas ------------------------------ */}
       <Panel className="mt-3">
         <PanelHeader
-          title="Relatório de horas por monitor"
-          subtitle="Gerado automaticamente a cada sessão registrada — a base da certificação."
+          title="Relatório de horas realizadas por monitor"
+          subtitle="Contabiliza apenas atendimentos concluídos com presença confirmada — a base da certificação."
           action={
             <Chip tone="accent">
               <FileText className="size-3" /> {(totalMinutes / 60).toFixed(1).replace(".", ",")} h no total
@@ -133,31 +158,34 @@ export default function RelatoriosPage() {
               </tr>
             </thead>
             <tbody>
-              {data.hoursByMonitor.map((row) => (
-                <tr
-                  key={row.monitorId}
-                  className={cn(
-                    "rounded-[12px] transition-colors hover:bg-surface-muted/60",
-                    user?.role === "monitor" && user.id === row.monitorId && "bg-accent-tint",
-                  )}
-                >
-                  <td className="rounded-l-[12px] px-2 py-2">
-                    <span className="flex items-center gap-2">
-                      <Avatar name={row.name} color={row.color} size="xs" />
-                      <span className="text-[12.5px] font-medium text-ink">{row.name}</span>
-                      {user?.role === "monitor" && user.id === row.monitorId ? <Chip tone="accent">você</Chip> : null}
-                    </span>
-                  </td>
-                  <td className="num px-2 py-2 text-right text-[12.5px] text-ink-soft">{row.sessions}</td>
-                  <td className="num px-2 py-2 text-right text-[12.5px] text-ink-soft">{row.minutes}</td>
-                  <td className="num px-2 py-2 text-right text-[12.5px] font-semibold text-ink">
-                    {row.hours.toFixed(1).replace(".", ",")}
-                  </td>
-                  <td className="num rounded-r-[12px] px-2 py-2 text-right text-[12px] text-ink-soft">
-                    {row.lastReportAt ? dateLabel(row.lastReportAt) : "—"}
-                  </td>
-                </tr>
-              ))}
+              {data.hoursByMonitor.map((row, idx) => {
+                const label = displayMonitorName(row.monitorId, row.name, idx);
+                return (
+                  <tr
+                    key={row.monitorId}
+                    className={cn(
+                      "rounded-[12px] transition-colors hover:bg-surface-muted/60",
+                      user?.role === "monitor" && user.id === row.monitorId && "bg-accent-tint",
+                    )}
+                  >
+                    <td className="rounded-l-[12px] px-2 py-2">
+                      <span className="flex items-center gap-2">
+                        <Avatar name={label} color={row.color} size="xs" />
+                        <span className="text-[12.5px] font-medium text-ink">{label}</span>
+                        {user?.role === "monitor" && user.id === row.monitorId ? <Chip tone="accent">você</Chip> : null}
+                      </span>
+                    </td>
+                    <td className="num px-2 py-2 text-right text-[12.5px] text-ink-soft">{row.sessions}</td>
+                    <td className="num px-2 py-2 text-right text-[12.5px] text-ink-soft">{row.minutes}</td>
+                    <td className="num px-2 py-2 text-right text-[12.5px] font-semibold text-ink">
+                      {row.hours.toFixed(1).replace(".", ",")}
+                    </td>
+                    <td className="num rounded-r-[12px] px-2 py-2 text-right text-[12px] text-ink-soft">
+                      {row.lastReportAt ? dateLabel(row.lastReportAt) : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -208,7 +236,14 @@ export default function RelatoriosPage() {
                   label: item.bucket,
                   value: item.count,
                   max: maxSla,
-                  color: item.bucket === "até 24 h" ? "sage" : item.bucket === "24–48 h" ? "blue" : item.bucket === "48–96 h" ? "sand" : "peach",
+                  color:
+                    item.bucket === "até 24 h"
+                      ? "sage"
+                      : item.bucket === "24–48 h"
+                        ? "blue"
+                        : item.bucket === "48–96 h"
+                          ? "sand"
+                          : "peach",
                 }))}
               />
             </div>
@@ -227,7 +262,11 @@ export default function RelatoriosPage() {
         <PanelHeader
           title="Leitura rápida"
           subtitle="Como usar estes números na apresentação de dezembro."
-          action={<Chip tone="neutral"><TrendingUp className="size-3" /> piloto</Chip>}
+          action={
+            <Chip tone="neutral">
+              <TrendingUp className="size-3" /> piloto
+            </Chip>
+          }
         />
         <div className="grid gap-3 p-5 sm:grid-cols-3">
           {[

@@ -1,6 +1,21 @@
-import { badRequest, conflict, notFound, ok, readJson, serverError } from "@/lib/server/http";
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+  ok,
+  readJson,
+  serverError,
+  unauthorized,
+} from "@/lib/server/http";
+import { resolveActor } from "@/lib/server/auth";
 import { readDb, updateDb } from "@/lib/server/db";
-import { nextId } from "@/lib/server/repository";
+import {
+  applyCompletedSessionToMonitor,
+  applySessionRatingToMonitor,
+  nextId,
+} from "@/lib/server/repository";
+import { cleanParagraph, cleanText } from "@/lib/server/validate";
 import type { Session } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -11,11 +26,21 @@ interface CompletePayload {
   attendance: "present" | "absent";
   rating?: number;
   notes?: string;
+  location?: string;
 }
 
-export async function GET() {
+interface RatePayload {
+  requestId?: string;
+  sessionId?: string;
+  rating: number;
+  notes?: string;
+}
+
+export async function GET(request: Request) {
   try {
     const db = await readDb();
+    const actor = await resolveActor(request, db);
+    if (!actor) return unauthorized();
     return ok(db.sessions);
   } catch {
     return serverError("Não foi possível carregar as sessões.");
@@ -23,9 +48,10 @@ export async function GET() {
 }
 
 /**
- * Registra a sessão concluída (o "registro em poucos toques" do projeto):
- * grava duração, presença e avaliação, fecha o pedido e soma as horas no
- * relatório do monitor.
+ * Registra a sessão concluída pelo monitor (ou coordenação):
+ * grava duração, presença e observações, fecha o pedido e soma as horas no
+ * relatório do monitor. A nota pode ser informada na hora ou depois pelo
+ * próprio estudante em `PATCH /api/sessions`.
  */
 export async function POST(request: Request) {
   const payload = await readJson<CompletePayload>(request);
@@ -36,17 +62,27 @@ export async function POST(request: Request) {
   }
 
   const attendance = payload.attendance === "absent" ? "absent" : "present";
-  // só quem compareceu avalia; a nota é um inteiro de 1 a 5
   const rating =
     attendance === "present" && Number.isInteger(payload.rating) && (payload.rating as number) >= 1 && (payload.rating as number) <= 5
       ? (payload.rating as number)
       : undefined;
+  const notes = cleanParagraph(payload.notes, 500) || undefined;
+  const location = payload.location !== undefined ? cleanText(payload.location, 160) || undefined : undefined;
 
   try {
     const current = await readDb();
+    const actor = await resolveActor(request, current);
+    if (!actor) return unauthorized();
+
     const found = current.requests.find((item) => item.id === payload.requestId);
     if (!found) return notFound("Pedido não encontrado.");
-    // registrar duas vezes somaria as horas em dobro no relatório do monitor
+
+    const isCoordinator = actor.role === "coordinator";
+    const isAssignedMonitor = actor.role === "monitor" && Boolean(found.monitorId) && actor.monitorId === found.monitorId;
+    if (!isCoordinator && !isAssignedMonitor) {
+      return forbidden("Apenas o monitor responsável ou a coordenação podem registrar o atendimento.");
+    }
+
     if (found.status === "done") return conflict("Este atendimento já foi registrado.");
     if (found.status === "cancelled") return conflict("Pedido cancelado: reabra antes de registrar.");
 
@@ -69,7 +105,8 @@ export async function POST(request: Request) {
         minutes,
         attendance,
         rating,
-        notes: payload.notes?.trim() || undefined,
+        notes,
+        location: location ?? existing?.location,
       };
 
       if (existing) {
@@ -84,14 +121,7 @@ export async function POST(request: Request) {
 
       const monitor = draft.monitors.find((item) => item.id === target.monitorId);
       if (monitor && attendance === "present") {
-        monitor.weeklyHours = Math.round((monitor.weeklyHours + minutes / 60) * 10) / 10;
-        monitor.sessions += 1;
-        // a nota do atendimento entra na média do monitor
-        if (rating !== undefined) {
-          const total = monitor.rating * monitor.ratingCount + rating;
-          monitor.ratingCount += 1;
-          monitor.rating = Math.round((total / monitor.ratingCount) * 100) / 100;
-        }
+        applyCompletedSessionToMonitor(monitor, minutes, rating);
       }
 
       out.session = record;
@@ -101,5 +131,72 @@ export async function POST(request: Request) {
     return ok({ session: out.session, requests: db.requests }, { status: 201 });
   } catch {
     return serverError("Não foi possível registrar a sessão.");
+  }
+}
+
+/**
+ * Avaliação do atendimento pelo próprio estudante (1 a 5 estrelas),
+ * atualizando a média do monitor e o indicador de satisfação do piloto.
+ */
+export async function PATCH(request: Request) {
+  const payload = await readJson<RatePayload>(request);
+  if (!payload || (!payload.requestId && !payload.sessionId)) {
+    return badRequest("Informe o atendimento que deseja avaliar.");
+  }
+  const rating = Number(payload.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return badRequest("Escolha uma nota de 1 a 5 estrelas.");
+  }
+
+  const studentNote = cleanParagraph(payload.notes, 300);
+
+  try {
+    const current = await readDb();
+    const actor = await resolveActor(request, current);
+    if (!actor) return unauthorized();
+
+    const targetSession = current.sessions.find(
+      (s) => (payload.sessionId && s.id === payload.sessionId) || (payload.requestId && s.requestId === payload.requestId),
+    );
+    if (!targetSession) return notFound("Sessão não encontrada.");
+
+    const linkedRequest = current.requests.find((r) => r.id === targetSession.requestId);
+    if (linkedRequest && linkedRequest.status !== "done") {
+      return conflict("Só é possível avaliar atendimentos já concluídos.");
+    }
+    if (targetSession.attendance === "absent") {
+      return conflict("Atendimentos com falta não recebem avaliação.");
+    }
+
+    const isCoordinator = actor.role === "coordinator";
+    const isOwner = actor.role === "student" && actor.studentId === targetSession.studentId;
+    if (!isCoordinator && !isOwner) {
+      return forbidden("Apenas o estudante atendido pode avaliar esta sessão.");
+    }
+
+    let updatedSession: Session | null = null;
+
+    await updateDb((draft) => {
+      const session = draft.sessions.find((s) => s.id === targetSession.id);
+      if (!session) return;
+
+      const previousRating = session.rating;
+      session.rating = rating;
+      if (studentNote) {
+        session.notes = session.notes ? `${session.notes}\nFeedback do estudante: ${studentNote}` : studentNote;
+      }
+
+      const monitor = draft.monitors.find((m) => m.id === session.monitorId);
+      if (monitor) {
+        applySessionRatingToMonitor(monitor, previousRating, rating);
+      }
+
+      updatedSession = session;
+    });
+
+    if (!updatedSession) return notFound("Sessão não encontrada.");
+    return ok({ session: updatedSession });
+  } catch {
+    return serverError("Não foi possível salvar sua avaliação.");
   }
 }

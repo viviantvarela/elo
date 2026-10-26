@@ -1,12 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, MapPin } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, ExternalLink, MapPin, Star } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { PageHeader } from "@/components/page-header";
 import { CompleteSessionDialog } from "@/components/requests/complete-session-dialog";
+import { RateSessionDialog } from "@/components/requests/rate-session-dialog";
 import { Avatar, Button, Chip, EmptyState, Panel, PanelHeader, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
 import { weekdayShort } from "@/lib/constants";
@@ -30,6 +31,7 @@ export default function AgendaPage() {
 
   const [weekOffset, setWeekOffset] = useState(0);
   const [completing, setCompleting] = useState<{ request: HelpRequest; session: Session } | null>(null);
+  const [ratingSession, setRatingSession] = useState<Session | null>(null);
 
   const role = user?.role ?? "coordinator";
   const mine = useMemo(() => visibleSessions(sessions.data ?? [], user), [sessions.data, user]);
@@ -39,16 +41,6 @@ export default function AgendaPage() {
     start.setDate(start.getDate() + weekOffset * 7);
     return start;
   }, [weekOffset]);
-
-  const days = useMemo(
-    () =>
-      Array.from({ length: 5 }, (_, index) => {
-        const day = new Date(weekStart);
-        day.setDate(day.getDate() + index);
-        return day;
-      }),
-    [weekStart],
-  );
 
   const weekSessions = useMemo(() => {
     const end = new Date(weekStart);
@@ -61,13 +53,31 @@ export default function AgendaPage() {
       .sort((a, b) => +new Date(a.startsAt) - +new Date(b.startsAt));
   }, [mine, weekStart]);
 
+  // Exibe sábado/domingo automaticamente quando houver sessões no fim de semana
+  const dayCount = useMemo(() => {
+    const hasSunday = weekSessions.some((session) => new Date(session.startsAt).getDay() === 0);
+    if (hasSunday) return 7;
+    const hasSaturday = weekSessions.some((session) => new Date(session.startsAt).getDay() === 6);
+    if (hasSaturday) return 6;
+    return 5;
+  }, [weekSessions]);
+
+  const days = useMemo(
+    () =>
+      Array.from({ length: dayCount }, (_, index) => {
+        const day = new Date(weekStart);
+        day.setDate(day.getDate() + index);
+        return day;
+      }),
+    [weekStart, dayCount],
+  );
+
   const requestOf = (session: Session) => requests.data?.requests.find((entry) => entry.id === session.requestId);
   const canRegister = (session: Session) => {
     const request = requestOf(session);
     return Boolean(request && new Date(session.startsAt) < new Date() && requestPermissions(request, user).register);
   };
 
-  // sessões que já aconteceram e ainda esperam presença/avaliação (de qualquer semana)
   const pending = mine.filter(canRegister).sort((a, b) => +new Date(a.startsAt) - +new Date(b.startsAt));
 
   const monthLabel = weekStart.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
@@ -80,7 +90,7 @@ export default function AgendaPage() {
       ? {
           eyebrow: "Seus atendimentos",
           title: "Minha agenda",
-          subtitle: "Seus atendimentos agendados e concluídos, semana a semana.",
+          subtitle: "Seus atendimentos agendados e concluídos, com local/link e avaliação.",
         }
       : role === "monitor"
         ? {
@@ -91,7 +101,7 @@ export default function AgendaPage() {
         : {
             eyebrow: "Sessões confirmadas",
             title: "Agenda da semana",
-            subtitle: "Cada atendimento agendado vira uma sessão com duração, presença e avaliação registradas.",
+            subtitle: "Cada atendimento agendado vira uma sessão com sala/link, duração, presença e avaliação.",
           };
 
   const thirdStat =
@@ -100,6 +110,9 @@ export default function AgendaPage() {
       : role === "monitor"
         ? { label: "Estudantes atendidos", value: new Set(weekSessions.map((session) => session.studentId)).size }
         : { label: "Monitores envolvidos", value: new Set(weekSessions.map((session) => session.monitorId)).size };
+
+  const gridColsClass =
+    dayCount === 7 ? "sm:grid-cols-7" : dayCount === 6 ? "sm:grid-cols-6" : "sm:grid-cols-5";
 
   return (
     <>
@@ -126,9 +139,9 @@ export default function AgendaPage() {
         <Panel>
           <PanelHeader
             title={`${weekSessions.length} ${weekSessions.length === 1 ? "sessão" : "sessões"} nesta semana`}
-            subtitle={`Semana de ${days[0].toLocaleDateString("pt-BR")} a ${days[4].toLocaleDateString("pt-BR")}.`}
+            subtitle={`Semana de ${days[0].toLocaleDateString("pt-BR")} a ${days[days.length - 1].toLocaleDateString("pt-BR")}.`}
           />
-          <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-5">
+          <div className={cn("grid grid-cols-1 gap-2 p-3", gridColsClass)}>
             {days.map((day) => {
               const daySessions = weekSessions.filter(
                 (session) => new Date(session.startsAt).toDateString() === day.toDateString(),
@@ -165,7 +178,10 @@ export default function AgendaPage() {
                         const past = new Date(session.startsAt) < new Date();
                         const awaiting = past && request?.status === "scheduled";
                         const absent = request?.status === "done" && session.attendance === "absent";
-                        // quem aparece no cartão: a outra pessoa do atendimento
+                        const canStudentRate =
+                          role === "student" &&
+                          request?.status === "done" &&
+                          session.attendance !== "absent";
                         const counterpart =
                           role === "student"
                             ? { line: `com ${shortName(monitor?.name ?? "monitor")}`, name: monitor?.name, color: monitor?.color }
@@ -194,7 +210,25 @@ export default function AgendaPage() {
                               {topic?.name}
                             </Link>
                             <p className="truncate text-[10.5px] text-ink-soft">{counterpart.line}</p>
-                            <div className="mt-1.5 flex items-center justify-between">
+
+                            {session.location ? (
+                              /^https?:\/\//i.test(session.location) ? (
+                                <a
+                                  href={session.location}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-[10px] font-medium text-accent-strong hover:underline"
+                                >
+                                  <ExternalLink className="size-2.5 shrink-0" /> Abrir link remoto
+                                </a>
+                              ) : (
+                                <p className="mt-0.5 flex items-center gap-1 truncate text-[10px] text-ink-faint">
+                                  <MapPin className="size-2.5 shrink-0" /> {session.location}
+                                </p>
+                              )
+                            ) : null}
+
+                            <div className="mt-1.5 flex items-center justify-between gap-1">
                               <Avatar name={counterpart.name ?? ""} color={counterpart.color ?? "blue"} size="xs" />
                               {request && canRegister(session) ? (
                                 <button
@@ -202,6 +236,14 @@ export default function AgendaPage() {
                                   className="rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent-strong hover:bg-accent-tint"
                                 >
                                   registrar
+                                </button>
+                              ) : canStudentRate ? (
+                                <button
+                                  onClick={() => setRatingSession(session)}
+                                  className="inline-flex items-center gap-0.5 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent-strong hover:bg-accent-tint"
+                                >
+                                  <Star className="size-2.5 fill-current" />
+                                  {session.rating ? `${session.rating}★` : "avaliar"}
                                 </button>
                               ) : null}
                             </div>
@@ -276,9 +318,9 @@ export default function AgendaPage() {
             <ol className="space-y-2 p-3 text-[11.5px] leading-snug text-ink-soft">
               {[
                 "O pedido é pareado com um monitor que domina o tópico.",
-                "A sessão entra na agenda com dia, hora e duração.",
+                "A sessão entra na agenda com dia, hora, duração e sala.",
                 "Ao final, o monitor registra presença e o estudante avalia.",
-                "As horas caem automaticamente no relatório.",
+                "As horas realizadas caem automaticamente no relatório.",
               ].map((step, index) => (
                 <li key={step} className="flex gap-2">
                   <span className="num flex size-4 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[10px] font-semibold text-accent-strong">
@@ -314,6 +356,14 @@ export default function AgendaPage() {
         monitor={completing ? monitorOf(completing.session.monitorId) ?? null : null}
         student={completing ? studentOf(completing.session.studentId) ?? null : null}
         defaultMinutes={completing?.session.minutes}
+      />
+
+      <RateSessionDialog
+        open={Boolean(ratingSession)}
+        onClose={() => setRatingSession(null)}
+        session={ratingSession}
+        monitor={ratingSession ? monitorOf(ratingSession.monitorId) ?? null : null}
+        topic={ratingSession ? topicOf(ratingSession.topicId) ?? null : null}
       />
     </>
   );

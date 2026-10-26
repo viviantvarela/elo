@@ -4,9 +4,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   CalendarCheck,
+  CalendarClock,
   Check,
   Clock3,
+  ExternalLink,
   HandHeart,
+  MapPin,
   RotateCcw,
   Sparkles,
   Star,
@@ -18,7 +21,21 @@ import { useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { CompleteSessionDialog } from "@/components/requests/complete-session-dialog";
-import { Avatar, Button, Chip, Dot, EmptyState, Field, Panel, PanelHeader, ProgressBar, Select, Skeleton } from "@/components/ui";
+import { RateSessionDialog } from "@/components/requests/rate-session-dialog";
+import {
+  Avatar,
+  Button,
+  Chip,
+  Dot,
+  EmptyState,
+  Field,
+  Input,
+  Panel,
+  PanelHeader,
+  ProgressBar,
+  Select,
+  Skeleton,
+} from "@/components/ui";
 import { api } from "@/lib/api";
 import { statusLabels, urgencyLabels, weekdayShort } from "@/lib/constants";
 import { requestPermissions, useCurrentUser } from "@/lib/current-user";
@@ -34,6 +51,13 @@ const statusTone = {
   cancelled: "neutral",
 } as const;
 
+const locationPresets = [
+  "Lab 02 · DIATINF",
+  "Biblioteca · Mesa 4",
+  "Sala de Monitoria B1",
+  "https://meet.google.com/elo-ifrn",
+];
+
 function nextOccurrence(day: number, startMinutes: number) {
   const now = new Date();
   const date = new Date(now);
@@ -44,7 +68,6 @@ function nextOccurrence(day: number, startMinutes: number) {
   return date;
 }
 
-/** Janelas do estudante, recortadas pela agenda do monitor quando há horário em comum. */
 function windowsFor(request: HelpRequest, monitor: Monitor) {
   return request.preferred.map((slot) => {
     let best: Slot | null = null;
@@ -59,11 +82,39 @@ function windowsFor(request: HelpRequest, monitor: Monitor) {
   });
 }
 
+function isUrl(value?: string) {
+  return Boolean(value && /^https?:\/\//i.test(value.trim()));
+}
+
+export function LocationBadge({ location }: { location?: string }) {
+  if (!location?.trim()) return null;
+  const trimmed = location.trim();
+  if (isUrl(trimmed)) {
+    return (
+      <a
+        href={trimmed}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 rounded-full border border-accent/35 bg-surface px-2.5 py-0.5 text-[11.5px] font-medium text-accent-strong transition-colors hover:bg-accent-soft"
+      >
+        <ExternalLink className="size-3" /> Sala remota (abrir link)
+      </a>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-0.5 text-[11.5px] text-ink-soft">
+      <MapPin className="size-3 text-accent" /> {trimmed}
+    </span>
+  );
+}
+
 export function RequestDetail({ requestId }: { requestId: string | null }) {
   const queryClient = useQueryClient();
   const { user, people } = useCurrentUser();
   const [minutes, setMinutes] = useState(60);
   const [completing, setCompleting] = useState(false);
+  const [ratingOpen, setRatingOpen] = useState(false);
+  const [rescheduling, setRescheduling] = useState(false);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["request", requestId],
@@ -72,7 +123,7 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
   });
 
   const invalidate = () => {
-    for (const key of ["dashboard", "requests", "request", "reports", "sessions"]) {
+    for (const key of ["dashboard", "requests", "request", "reports", "sessions", "monitors", "people"]) {
       void queryClient.invalidateQueries({ queryKey: [key] });
     }
   };
@@ -85,7 +136,7 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
     mutationFn: (monitorId: string) => api.matchRequest(requestId as string, monitorId),
     onSuccess: () => {
       toast.success(
-        user?.role === "monitor" ? "Pedido aceito. Agora escolha o horário do atendimento." : "Monitor vinculado ao pedido.",
+        user?.role === "monitor" ? "Pedido aceito. Agora escolha o horário e local do atendimento." : "Monitor vinculado ao pedido.",
       );
       invalidate();
     },
@@ -93,9 +144,17 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
   });
 
   const schedule = useMutation({
-    mutationFn: ({ monitorId, startsAt }: { monitorId: string; startsAt: string }) =>
-      api.scheduleRequest(requestId as string, monitorId, startsAt, minutes),
+    mutationFn: ({
+      monitorId,
+      startsAt,
+      location,
+    }: {
+      monitorId: string;
+      startsAt: string;
+      location?: string;
+    }) => api.scheduleRequest(requestId as string, monitorId, startsAt, minutes, location),
     onSuccess: () => {
+      setRescheduling(false);
       toast.success("Atendimento agendado. Já aparece na agenda.");
       invalidate();
     },
@@ -105,6 +164,7 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
   const cancel = useMutation({
     mutationFn: () => api.cancelRequest(requestId as string),
     onSuccess: () => {
+      setRescheduling(false);
       toast.success("Pedido cancelado.");
       invalidate();
     },
@@ -114,6 +174,7 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
   const release = useMutation({
     mutationFn: () => api.reopenRequest(requestId as string),
     onSuccess: () => {
+      setRescheduling(false);
       toast.success("Pedido devolvido à fila. Outros monitores já podem aceitar.");
       invalidate();
     },
@@ -256,7 +317,8 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
               viewerIsMonitor={viewer === "monitor"}
               minutes={minutes}
               setMinutes={setMinutes}
-              onSchedule={(startsAt) => schedule.mutate({ monitorId: chosen.id, startsAt })}
+              initialLocation={session?.location}
+              onSchedule={(startsAt, location) => schedule.mutate({ monitorId: chosen.id, startsAt, location })}
               pending={schedule.isPending}
             />
           ) : (
@@ -277,25 +339,62 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
 
         {/* ----------------------------- agendado ---------------------------- */}
         {request.status === "scheduled" ? (
-          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-[14px] border border-accent/30 bg-accent-tint p-3">
-            <CalendarCheck className="size-4 text-accent-strong" />
-            <p className="text-[12.5px] text-ink">
-              {viewer === "student" ? "Seu atendimento com " : "Agendado com "}
-              <span className="font-medium">{chosen?.name}</span> —{" "}
-              <span className="num font-medium">{session ? dateTimeLabel(session.startsAt) : "a confirmar"}</span>
-              {session ? <span className="text-ink-soft"> · {session.minutes} min</span> : null}
-            </p>
-            {can.register ? (
-              <Button size="sm" className="ml-auto" onClick={() => setCompleting(true)}>
-                Registrar atendimento
-              </Button>
+          <div className="mt-4 space-y-2.5 rounded-[14px] border border-accent/30 bg-accent-tint p-3.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <CalendarCheck className="size-4 shrink-0 text-accent-strong" />
+              <p className="text-[12.5px] text-ink">
+                {viewer === "student" ? "Seu atendimento com " : "Agendado com "}
+                <span className="font-medium">{chosen?.name}</span> —{" "}
+                <span className="num font-medium">{session ? dateTimeLabel(session.startsAt) : "a confirmar"}</span>
+                {session ? <span className="text-ink-soft"> · {session.minutes} min</span> : null}
+              </p>
+              <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                {can.schedule ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      if (session?.minutes) setMinutes(session.minutes);
+                      setRescheduling((value) => !value);
+                    }}
+                  >
+                    <CalendarClock className="size-3.5" /> {rescheduling ? "Fechar remarcação" : "Remarcar / local"}
+                  </Button>
+                ) : null}
+                {can.register ? (
+                  <Button size="sm" onClick={() => setCompleting(true)}>
+                    Registrar atendimento
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            {session?.location ? (
+              <div className="flex items-center gap-2">
+                <LocationBadge location={session.location} />
+              </div>
+            ) : null}
+
+            {rescheduling && chosen && can.schedule ? (
+              <MatchedActions
+                key={`resched-${request.id}-${session?.startsAt ?? ""}`}
+                request={request}
+                monitor={chosen}
+                viewerIsMonitor={viewer === "monitor"}
+                minutes={minutes}
+                setMinutes={setMinutes}
+                initialLocation={session?.location}
+                isReschedule
+                onSchedule={(startsAt, location) => schedule.mutate({ monitorId: chosen.id, startsAt, location })}
+                pending={schedule.isPending}
+              />
             ) : null}
           </div>
         ) : null}
 
         {/* ----------------------------- concluído --------------------------- */}
         {request.status === "done" ? (
-          <div className="mt-4 space-y-1.5 rounded-[14px] border border-line bg-surface-muted/60 p-3 text-[12.5px] text-ink-soft">
+          <div className="mt-4 space-y-2 rounded-[14px] border border-line bg-surface-muted/60 p-3.5 text-[12.5px] text-ink-soft">
             {session?.attendance === "absent" ? (
               <p>Encerrado como falta: o estudante não compareceu ao atendimento com {chosen?.name}. Nenhuma hora foi somada.</p>
             ) : viewer === "student" ? (
@@ -306,12 +405,32 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
             ) : (
               <p>Atendimento concluído com {chosen?.name}. As horas já estão no relatório do monitor.</p>
             )}
+
+            {session?.location ? (
+              <div>
+                <LocationBadge location={session.location} />
+              </div>
+            ) : null}
+
             {typeof session?.rating === "number" ? (
-              <p className="flex items-center gap-1.5">
-                Avaliação: <StarRating value={session.rating} />
+              <p className="flex flex-wrap items-center gap-1.5">
+                <span>Avaliação:</span>
+                <StarRating value={session.rating} />
               </p>
             ) : null}
-            {session?.notes ? <p className="text-ink">Observação: {session.notes}</p> : null}
+
+            {session?.notes ? (
+              <p className="whitespace-pre-line text-ink">Observações: {session.notes}</p>
+            ) : null}
+
+            {can.rate && session && session.attendance !== "absent" ? (
+              <div className="pt-1">
+                <Button size="sm" variant={session.rating ? "outline" : "primary"} onClick={() => setRatingOpen(true)}>
+                  <Star className="size-3.5" />
+                  {session.rating ? "Editar minha avaliação" : "Avaliar atendimento"}
+                </Button>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -424,6 +543,14 @@ export function RequestDetail({ requestId }: { requestId: string | null }) {
         student={student}
         defaultMinutes={session?.minutes}
       />
+
+      <RateSessionDialog
+        open={ratingOpen}
+        onClose={() => setRatingOpen(false)}
+        session={session}
+        monitor={chosen ?? null}
+        topic={topic}
+      />
     </div>
   );
 }
@@ -457,7 +584,7 @@ function StudentProgress({
     return (
       <Notice tone="info" icon={<X className="size-3.5" />}>
         Este pedido foi cancelado{request.closedAt ? ` em ${dateTimeLabel(request.closedAt)}` : ""}. Se ainda precisar
-        de ajuda, reabra o pedido ou faça um novo.
+        de ajuda, faça um novo pedido ou peça à coordenação para reabri-lo.
       </Notice>
     );
   }
@@ -630,6 +757,8 @@ function MatchedActions({
   viewerIsMonitor,
   minutes,
   setMinutes,
+  initialLocation,
+  isReschedule,
   onSchedule,
   pending,
 }: {
@@ -638,27 +767,35 @@ function MatchedActions({
   viewerIsMonitor: boolean;
   minutes: number;
   setMinutes: (value: number) => void;
-  onSchedule: (startsAt: string) => void;
+  initialLocation?: string;
+  isReschedule?: boolean;
+  onSchedule: (startsAt: string, location?: string) => void;
   pending: boolean;
 }) {
   const windows = useMemo(() => windowsFor(request, monitor), [request, monitor]);
   const [index, setIndex] = useState(() => String(Math.max(0, windows.findIndex((item) => item.shared))));
+  const [location, setLocation] = useState(initialLocation ?? "Lab 02 · DIATINF");
   const chosen = windows[Number(index)] ?? windows[0];
 
   if (!chosen) return null;
 
   return (
-    <div className="mt-4 rounded-[14px] border border-accent/30 bg-accent-tint p-3">
+    <div className={cn("rounded-[14px] border border-accent/30 bg-surface p-3", !isReschedule && "mt-4 bg-accent-tint")}>
       <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-accent-strong">
-        <Check className="size-3.5" /> {viewerIsMonitor ? "Pedido aceito por você" : `Vinculado a ${monitor.name}`}
+        <Check className="size-3.5" />
+        {isReschedule
+          ? "Remarcar horário ou atualizar local/link"
+          : viewerIsMonitor
+            ? "Pedido aceito por você"
+            : `Vinculado a ${monitor.name}`}
       </p>
       <p className="mt-0.5 text-[11.5px] text-ink-soft">
         {viewerIsMonitor
-          ? "Escolha uma janela do estudante — as marcadas “em comum” batem com a sua agenda — e confirme para gerar a sessão."
-          : "Escolha a janela do estudante e confirme para gerar a sessão na agenda."}
+          ? "Escolha uma janela do estudante, defina a sala ou link remoto e confirme."
+          : "Defina a janela do estudante e o local/link da sessão."}
       </p>
       <div className="mt-2.5 flex flex-wrap items-end gap-2">
-        <Field label="Janela" className="min-w-[min(300px,100%)] flex-1">
+        <Field label="Janela" className="min-w-[min(260px,100%)] flex-1">
           <Select value={index} onChange={(event) => setIndex(event.target.value)}>
             {windows.map((item, position) => (
               <option key={`${item.slot.day}-${item.slot.start}-${position}`} value={String(position)}>
@@ -671,16 +808,49 @@ function MatchedActions({
         </Field>
         <Field label="Duração" className="w-24">
           <Select value={String(minutes)} onChange={(event) => setMinutes(Number(event.target.value))}>
-            {[30, 45, 60, 90].map((value) => (
+            {[30, 45, 60, 75, 90].map((value) => (
               <option key={value} value={String(value)}>
                 {value} min
               </option>
             ))}
           </Select>
         </Field>
-        <Button className="ml-auto" onClick={() => onSchedule(chosen.date.toISOString())} disabled={pending}>
-          <ArrowRight className="size-4" /> {pending ? "Agendando…" : "Agendar"}
-        </Button>
+      </div>
+
+      <div className="mt-2.5 space-y-1.5">
+        <Field label="Local presencial ou link remoto (opcional)">
+          <Input
+            value={location}
+            onChange={(event) => setLocation(event.target.value)}
+            placeholder="Ex.: Lab 02 · DIATINF ou https://meet.google.com/..."
+            maxLength={200}
+          />
+        </Field>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {locationPresets.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setLocation(preset)}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[10.5px] transition-colors",
+                location === preset
+                  ? "border-accent bg-accent-soft font-medium text-accent-strong"
+                  : "border-line bg-surface-muted text-ink-soft hover:text-ink",
+              )}
+            >
+              {preset.startsWith("http") ? "Google Meet" : preset}
+            </button>
+          ))}
+          <Button
+            size="sm"
+            className="ml-auto"
+            onClick={() => onSchedule(chosen.date.toISOString(), location.trim() || undefined)}
+            disabled={pending}
+          >
+            <ArrowRight className="size-4" /> {pending ? "Salvando…" : isReschedule ? "Salvar alteração" : "Agendar"}
+          </Button>
+        </div>
       </div>
     </div>
   );

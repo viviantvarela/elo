@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -25,12 +26,8 @@ function normalize(value: string) {
   return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 }
 
-/**
- * Troca de usuário enquanto não há login: escolhe quem está usando o Elo neste
- * navegador. A tela de login vai substituir este passo — o restante do app já
- * lê a identidade por `useCurrentUser()`.
- */
 export function SwitchUserDialog() {
+  const queryClient = useQueryClient();
   const open = useUi((state) => state.switcherOpen);
   const setOpen = useUi((state) => state.setSwitcherOpen);
   const setIdentity = useUi((state) => state.setIdentity);
@@ -78,6 +75,7 @@ export function SwitchUserDialog() {
           name: student.name,
           detail: [student.className, student.course].filter(Boolean).join(" · "),
           color: student.color,
+          extra: student.guardianConsent ? undefined : "Autorização do responsável pendente",
         }))
         .filter(matches)
         .sort(byName);
@@ -99,11 +97,12 @@ export function SwitchUserDialog() {
   }, [people, tab, query]);
 
   const choose = (entry: Entry) => {
-    const same = user?.role === tab && user.id === entry.id;
+    const same = user?.role === tab && user.id === entry.id && user.authMode === "demo";
     setOpen(false);
     if (same) return;
 
     setIdentity(tab, tab === "coordinator" ? null : entry.id);
+    void queryClient.invalidateQueries();
     toast.success(`Agora você está usando o Elo como ${entry.name}.`);
     if (!canAccess(pathname, tab)) router.push("/painel");
   };
@@ -112,8 +111,8 @@ export function SwitchUserDialog() {
     <Dialog
       open={open}
       onClose={() => setOpen(false)}
-      title="Trocar de usuário"
-      description="Enquanto a tela de login não chega, escolha quem está usando o Elo neste navegador. Cada usuário vê a própria navegação, pedidos e agenda."
+      title="Trocar de usuário (demonstração)"
+      description="Escolha um perfil para simular cada visão da plataforma. Para entrar com sua conta institucional real, acesse Login institucional no menu."
       width="max-w-lg"
     >
       <div className="space-y-2.5 pb-3">
@@ -181,7 +180,12 @@ export function SwitchUserDialog() {
                     <span className="block truncate text-[13px] font-medium text-ink">{entry.name}</span>
                     <span className="block truncate text-[11.5px] text-ink-soft">{entry.detail}</span>
                     {entry.extra ? (
-                      <span className={cn("block truncate text-[11px]", tab === "coordinator" ? "text-warn" : "text-ink-faint")}>
+                      <span
+                        className={cn(
+                          "block truncate text-[11px]",
+                          tab === "coordinator" || entry.extra.includes("pendente") ? "text-warn" : "text-ink-faint",
+                        )}
+                      >
                         {entry.extra}
                       </span>
                     ) : null}
@@ -197,13 +201,6 @@ export function SwitchUserDialog() {
           })}
         </ul>
       )}
-
-      {tab === "coordinator" ? (
-        <p className="mt-3 rounded-[12px] border border-line bg-surface-muted/70 px-3 py-2.5 text-[11.5px] leading-snug text-ink-soft">
-          A conta da coordenação vê toda a fila, pareia, agenda e acompanha os relatórios. Nome, e-mail e campus ficam em
-          Configurações → Meu perfil.
-        </p>
-      ) : null}
     </Dialog>
   );
 }

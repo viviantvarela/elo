@@ -9,6 +9,7 @@ import { Avatar, Button, Chip, Field, Input, Panel, PanelHeader, Switch, Textare
 import { api } from "@/lib/api";
 import { monitorKindLabels, pilotSlots, weekdayShort } from "@/lib/constants";
 import type { CurrentUser } from "@/lib/current-user";
+import { isDemoModeEnabled } from "@/lib/supabase-browser";
 import type { DemoProfile, Monitor, Slot, Student, Topic } from "@/lib/types";
 import { cn, formatSlot } from "@/lib/utils";
 import { useUi } from "@/store/ui";
@@ -16,12 +17,11 @@ import { useUi } from "@/store/ui";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const BIO_MAX = 280;
 
-/** "Meu perfil" de quem está usando o Elo — os campos mudam com o papel. */
 export function ProfilePanel({ user, topics }: { user: CurrentUser; topics: Topic[] }) {
   const setSwitcherOpen = useUi((state) => state.setSwitcherOpen);
   const ref = useRef<HTMLDivElement>(null);
+  const showDemoSwitcher = user.authMode === "demo" && isDemoModeEnabled();
 
-  // chegou por "Meu perfil" (/configuracoes#perfil): rola até aqui e foca o nome
   useEffect(() => {
     if (window.location.hash !== "#perfil") return;
     const node = ref.current;
@@ -44,9 +44,11 @@ export function ProfilePanel({ user, topics }: { user: CurrentUser; topics: Topi
           title="Meu perfil"
           subtitle={subtitle}
           action={
-            <Button variant="ghost" size="sm" onClick={() => setSwitcherOpen(true)}>
-              <ArrowLeftRight className="size-3.5" /> Trocar de usuário
-            </Button>
+            showDemoSwitcher ? (
+              <Button variant="ghost" size="sm" onClick={() => setSwitcherOpen(true)}>
+                <ArrowLeftRight className="size-3.5" /> Trocar de usuário
+              </Button>
+            ) : undefined
           }
         />
 
@@ -81,9 +83,7 @@ function useSaveProfile<T, R>(mutationFn: (input: T) => Promise<R>, onSaved: (sa
     mutationFn,
     onSuccess: (saved) => {
       toast.success("Perfil atualizado.");
-      // o formulário passa a refletir o que o servidor gravou (espaços, caixa do e-mail…)
       onSaved(saved);
-      // nome, turma e horários aparecem em várias telas: recarrega tudo
       void queryClient.invalidateQueries();
     },
     onError: (error: Error) => toast.error(error.message),
@@ -242,7 +242,13 @@ function StudentForm({ student }: { student: Student }) {
 
   const clean = { name: form.name.trim(), className: form.className.trim(), course: form.course.trim() };
   const dirty = (Object.keys(clean) as (keyof typeof clean)[]).some((key) => clean[key] !== initial[key]);
-  const error = !clean.name ? "Informe seu nome." : !clean.className ? "Informe sua turma." : !clean.course ? "Informe seu curso." : null;
+  const error = !clean.name
+    ? "Informe seu nome."
+    : !clean.className
+      ? "Informe sua turma."
+      : !clean.course
+        ? "Informe seu curso."
+        : null;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -306,9 +312,14 @@ const monitorForm = (monitor: Monitor) => ({
 });
 
 function MonitorForm({ monitor, topics }: { monitor: Monitor; topics: Topic[] }) {
-  // janelas do piloto + qualquer janela já salva fora delas (não some ao editar)
   const options = useMemo(() => {
-    const base = pilotSlots.map((slot) => ({ key: slotKey(slot), label: slot.label, day: slot.day, start: slot.start, end: slot.end }));
+    const base = pilotSlots.map((slot) => ({
+      key: slotKey(slot),
+      label: slot.label,
+      day: slot.day,
+      start: slot.start,
+      end: slot.end,
+    }));
     const extras = monitor.availability
       .filter((slot) => !base.some((option) => option.key === slotKey(slot)))
       .map((slot) => ({
