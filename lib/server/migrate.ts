@@ -12,6 +12,11 @@ export const LEGACY_PROFILE_NAME = "marina duarte";
 export const LEGACY_PROFILE_EMAIL = "marina.duarte@ifrn.edu.br";
 
 export function migrate(database: Database): Database {
+  // bases gravadas antes do Espaço de alinhamento (professor ↔ monitor) não têm estas listas
+  if (!database.teachers) database.teachers = [];
+  if (!database.alignmentMessages) database.alignmentMessages = [];
+  if (!database.alignmentMeetings) database.alignmentMeetings = [];
+
   if (!database.profile) {
     database.profile = blankCoordinatorProfile();
     return database;

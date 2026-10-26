@@ -42,7 +42,7 @@ const tables = await client.query<{ table_name: string }>(
   "select table_name from information_schema.tables where table_schema='public' order by table_name",
 );
 console.log("  tabelas:", tables.rows.map((r) => r.table_name).join(", "));
-assert(tables.rows.length === 11, `11 tabelas criadas (veio ${tables.rows.length})`);
+assert(tables.rows.length === 15, `15 tabelas criadas (veio ${tables.rows.length})`);
 
 const monitorTopics = await client.query<{ count: string }>("select count(*)::text as count from elo_monitor_topics");
 assert(Number(monitorTopics.rows[0].count) === 15, `15 vínculos monitor↔tópico (veio ${monitorTopics.rows[0].count})`);

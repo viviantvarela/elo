@@ -12,6 +12,10 @@ export function notFound(message = "Não encontrado") {
   return NextResponse.json({ error: message }, { status: 404 });
 }
 
+export function forbidden(message = "Sem permissão para esta ação") {
+  return NextResponse.json({ error: message }, { status: 403 });
+}
+
 /** A ação não vale para o estado atual do registro (ex.: cancelar um pedido já concluído). */
 export function conflict(message: string) {
   return NextResponse.json({ error: message }, { status: 409 });

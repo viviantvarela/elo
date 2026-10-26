@@ -9,7 +9,7 @@ import { Avatar, Button, Chip, Field, Input, Panel, PanelHeader, Switch, Textare
 import { api } from "@/lib/api";
 import { monitorKindLabels, pilotSlots, weekdayShort } from "@/lib/constants";
 import type { CurrentUser } from "@/lib/current-user";
-import type { DemoProfile, Monitor, Slot, Student, Topic } from "@/lib/types";
+import type { DemoProfile, Monitor, Slot, Student, Teacher, Topic } from "@/lib/types";
 import { cn, formatSlot } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
@@ -35,7 +35,9 @@ export function ProfilePanel({ user, topics }: { user: CurrentUser; topics: Topi
       ? "Conta da coordenação: o nome aparece no topo e identifica quem responde pelo piloto."
       : user.role === "student"
         ? "Seus dados de estudante. O monitor vê seu nome e sua turma no pedido."
-        : "Seus dados de monitor. Os horários de atendimento entram direto no pareamento.";
+        : user.role === "teacher"
+          ? "Seus dados de professor(a). Os tópicos que você leciona definem o Espaço de alinhamento com os monitores."
+          : "Seus dados de monitor. Os horários de atendimento entram direto no pareamento.";
 
   return (
     <div id="perfil" ref={ref} className="scroll-mt-4">
@@ -67,6 +69,9 @@ export function ProfilePanel({ user, topics }: { user: CurrentUser; topics: Topi
         {user.role === "student" && user.student ? <StudentForm key={user.id} student={user.student} /> : null}
         {user.role === "monitor" && user.monitor ? (
           <MonitorForm key={user.id} monitor={user.monitor} topics={topics} />
+        ) : null}
+        {user.role === "teacher" && user.teacher ? (
+          <TeacherForm key={user.id} teacher={user.teacher} topics={topics} />
         ) : null}
       </Panel>
     </div>
@@ -445,6 +450,112 @@ function MonitorForm({ monitor, topics }: { monitor: Monitor; topics: Topic[] })
       <ReadOnlyNote icon={<Clock3 className="size-3.5" />}>
         Tópicos, nível e teto semanal ({monitor.capacityHours} h, {monitorKindLabels[monitor.kind]}) são validados pela
         coordenação. Esta semana: <span className="num font-medium text-ink">{monitor.weeklyHours} h</span> comprometidas.
+      </ReadOnlyNote>
+
+      <FormFooter dirty={dirty} pending={save.isPending} error={error} onDiscard={() => setForm(initial)} />
+    </form>
+  );
+}
+
+/* -------------------------------- professor -------------------------------- */
+
+const teacherForm = (teacher: Teacher) => ({
+  name: teacher.name,
+  className: teacher.className,
+  email: teacher.email,
+  bio: teacher.bio,
+});
+
+function TeacherForm({ teacher, topics }: { teacher: Teacher; topics: Topic[] }) {
+  const initial = useMemo(() => teacherForm(teacher), [teacher]);
+  const [form, setForm] = useState(initial);
+  const save = useSaveProfile(
+    (patch: ReturnType<typeof teacherForm>) => api.updateTeacher(teacher.id, patch),
+    (saved) => setForm(teacherForm(saved)),
+  );
+
+  const clean = {
+    name: form.name.trim(),
+    className: form.className.trim(),
+    email: form.email.trim().toLowerCase(),
+    bio: form.bio.trim(),
+  };
+  const dirty = (Object.keys(clean) as (keyof typeof clean)[]).some((key) => clean[key] !== initial[key]);
+  const error = !clean.name
+    ? "Informe seu nome."
+    : !clean.className
+      ? "Informe a disciplina ou função."
+      : clean.email && !EMAIL.test(clean.email)
+        ? "Informe um e-mail válido."
+        : null;
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!dirty || error) return;
+    save.mutate(clean);
+  };
+
+  return (
+    <form className="space-y-3.5 p-5" onSubmit={submit} noValidate>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Nome">
+          <Input
+            value={form.name}
+            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+            autoComplete="name"
+            maxLength={80}
+            aria-invalid={!clean.name}
+          />
+        </Field>
+        <Field label="Disciplina / função">
+          <Input
+            value={form.className}
+            onChange={(event) => setForm((current) => ({ ...current, className: event.target.value }))}
+            placeholder="Professora de Matemática I"
+            maxLength={80}
+            aria-invalid={!clean.className}
+          />
+        </Field>
+        <Field label="E-mail institucional" className="sm:col-span-2">
+          <Input
+            type="email"
+            value={form.email}
+            onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+            placeholder="nome@ifrn.edu.br"
+            autoComplete="email"
+            maxLength={120}
+            aria-invalid={Boolean(clean.email && !EMAIL.test(clean.email))}
+          />
+        </Field>
+      </div>
+
+      <Field label="Sobre você" hint={`Aparece para os monitores no Espaço de alinhamento · ${form.bio.length}/${BIO_MAX}`}>
+        <Textarea
+          value={form.bio}
+          onChange={(event) => setForm((current) => ({ ...current, bio: event.target.value.slice(0, BIO_MAX) }))}
+          placeholder="O que você quer combinar com a monitoria, como prefere ser avisado…"
+          maxLength={BIO_MAX}
+        />
+      </Field>
+
+      <div>
+        <p className="mb-1.5 text-[12px] font-medium text-ink-soft">Tópicos que você leciona</p>
+        <div className="flex flex-wrap gap-1.5">
+          {teacher.topics.length === 0 ? (
+            <span className="text-[11.5px] text-ink-faint">Nenhum tópico vinculado ainda.</span>
+          ) : (
+            teacher.topics.map((topicId) => (
+              <Chip key={topicId} tone="neutral">
+                {topics.find((topic) => topic.id === topicId)?.name ?? topicId}
+              </Chip>
+            ))
+          )}
+        </div>
+      </div>
+
+      <ReadOnlyNote icon={<Clock3 className="size-3.5" />}>
+        Os tópicos que você leciona definem com quais monitores você se alinha em{" "}
+        <span className="font-medium text-ink">Alinhamento</span>. Mudar isso é com a coordenação.
       </ReadOnlyNote>
 
       <FormFooter dirty={dirty} pending={save.isPending} error={error} onDiscard={() => setForm(initial)} />

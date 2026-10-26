@@ -44,26 +44,69 @@ curl -X POST localhost:3000/api/admin/reset
 | **Monitores** | quem domina cada tópico (nível 1–5), disponibilidade por dia, carga da semana vs. capacidade, avaliação | "estudantes monitores e colegas" |
 | **Agenda** | semana com as sessões de quem está usando; registros pendentes; registrar presença ou falta direto do card | "agenda, registro de sessão" |
 | **Relatórios** | os 6 indicadores da proposta com meta e progresso; relatório de horas por monitor; demanda por tópico (inclusive **sem monitor**); SLA e distribuição de notas; export CSV | "relatório de horas", "painel agregado" |
+| **Alinhamento** | espaço restrito a professor(a) e monitor(a) do mesmo tópico: conversa para combinar mudanças nas aulas e reuniões agendadas direto no **Google Meet** | melhoria contínua do ensino a partir do que aparece na monitoria |
 | **Configurações** | **Meu perfil** de cada usuário, pesos do algoritmo com soma normalizada, paleta e tema, garantias de LGPD e reset | "pesos calibrados no piloto", LGPD |
 
 ### Usuários e papéis (antes do login)
 
 Ainda não há tela de login. Quem está usando o Elo é escolhido no **menu do usuário, no
 topo → Trocar de usuário** (também em ⌘K e em Configurações): a Coordenação, um dos
-estudantes ou um dos monitores. A escolha fica salva no navegador.
+estudantes, um dos monitores ou um dos professores. A escolha fica salva no navegador.
 
 | Papel | Vê | Pode |
 | --- | --- | --- |
 | **Estudante** | seus pedidos, sua agenda, monitores | abrir pedido para si, cancelar enquanto não foi agendado, editar nome, turma e curso |
-| **Monitor** | pedidos abertos dos tópicos que atende + os seus, sua agenda, monitores, relatórios | aceitar, agendar, registrar atendimento (presença ou falta), devolver à fila, editar o perfil (bio, disponibilidade e janelas de atendimento) |
-| **Coordenação** | tudo | parear qualquer pedido, ajustar pesos, restaurar a base |
+| **Monitor** | pedidos abertos dos tópicos que atende + os seus, sua agenda, monitores, relatórios, **Alinhamento** com o(s) professor(es) dos seus tópicos | aceitar, agendar, registrar atendimento (presença ou falta), devolver à fila, editar o perfil (bio, disponibilidade e janelas de atendimento), conversar e marcar reunião no Meet em Alinhamento |
+| **Professor(a)** | só **Alinhamento** (tópicos que leciona) e Configurações | conversar com os monitores dos seus tópicos e agendar reuniões no Google Meet |
+| **Coordenação** | tudo, exceto Alinhamento | parear qualquer pedido, ajustar pesos, restaurar a base |
+
+#### Espaço de alinhamento (professor ↔ monitor)
+
+Conversa e agenda de reuniões exclusiva de quem leciona um componente e de quem monitora
+aquele mesmo tópico — nem estudante, nem coordenação têm acesso (o menu já esconde a
+página, e as rotas em `app/api/alignment/**` conferem de novo no servidor antes de ler ou
+gravar qualquer mensagem, ver `canUseAlignmentTopic` em `lib/server/repository.ts`).
+
+- **Mensagens**: uma conversa por tópico, entre o(s) professor(es) que lecionam e o(s)
+  monitor(es) que atendem aquele componente.
+- **Reuniões no Google Meet**: o botão "Agendar no Meet" cria um espaço de verdade pela
+  [Google Meet API](https://developers.google.com/workspace/meet/api/guides/overview)
+  (`POST https://meet.googleapis.com/v2/spaces`) quando as credenciais abaixo estão
+  configuradas; sem elas, gera um link de demonstração (`meet.google.com/xxx-yyyy-zzz`) para
+  não travar o piloto — a mesma troca automática que o projeto já faz entre JSON e Postgres.
+
+Para ligar a API de verdade, defina no deploy (ver `.env.example`):
+
+```bash
+GOOGLE_MEET_CLIENT_ID="..."
+GOOGLE_MEET_CLIENT_SECRET="..."
+GOOGLE_MEET_REFRESH_TOKEN="..."
+```
+
+Resumo para gerar essas credenciais:
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → crie/abra um projeto e ative
+   a **Google Meet API**.
+2. Configure a tela de consentimento OAuth e crie uma credencial **ID do cliente OAuth**
+   (tipo "App para computador" facilita o passo seguinte).
+3. Autorize o escopo `https://www.googleapis.com/auth/meetings.space.created` com a conta
+   Google que vai "dona" das reuniões e troque o código por um *refresh token* (o
+   [OAuth 2.0 Playground](https://developers.google.com/oauthplayground) do Google faz isso
+   em poucos cliques).
+4. Cole client id, client secret e refresh token nas variáveis acima.
+
+> Este ambiente de desenvolvimento não tem saída de rede para `googleapis.com`, então a
+> chamada real não foi validada por aqui — o código (`lib/server/google-meet.ts`) está
+> pronto para produção (Vercel ou qualquer ambiente com acesso à internet), com fallback
+> automático para o link de demonstração se a chamada falhar por qualquer motivo.
 
 O perfil da coordenação começa **em branco**: preencha nome e e-mail em Configurações →
 Meu perfil (até lá, o topo mostra só "Coordenação"). Restaurar os dados de demonstração
 mantém o perfil.
 
 **Onde o login vai entrar:** a identidade vive em `store/ui.ts` (`role` + `studentId` /
-`monitorId`) e é resolvida em um ponto só, `useCurrentUser()` em `lib/current-user.ts`. As
+`monitorId` / `teacherId`) e é resolvida em um ponto só, `useCurrentUser()` em
+`lib/current-user.ts`. As
 telas leem tudo dali, e as regras de quem vê o quê estão em `canAccess` (`lib/constants.ts`)
 e `requestPermissions` / `visibleRequests` (`lib/current-user.ts`). A tela de login só precisa
 preencher essa identidade a partir da sessão. O servidor já recusa transições inválidas

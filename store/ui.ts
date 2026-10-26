@@ -21,6 +21,8 @@ interface UiState {
   studentId: string | null;
   /** monitor ativo quando `role` é "monitor" */
   monitorId: string | null;
+  /** professor ativo quando `role` é "teacher" */
+  teacherId: string | null;
   accent: AccentKey;
   theme: Theme;
   sidebarOpen: boolean;
@@ -37,10 +39,10 @@ interface UiState {
 
 const KEY = "elo.ui.v1";
 
-const roles: Role[] = ["student", "monitor", "coordinator"];
+const roles: Role[] = ["student", "monitor", "coordinator", "teacher"];
 const accents: AccentKey[] = ["green", "ocean", "plum", "rose", "amber"];
 
-type Persisted = Pick<UiState, "role" | "studentId" | "monitorId" | "accent" | "theme">;
+type Persisted = Pick<UiState, "role" | "studentId" | "monitorId" | "teacherId" | "accent" | "theme">;
 
 function apply(accent: AccentKey, theme: Theme) {
   if (typeof document === "undefined") return;
@@ -57,6 +59,7 @@ function snapshot(state: UiState): Persisted {
     role: state.role,
     studentId: state.studentId,
     monitorId: state.monitorId,
+    teacherId: state.teacherId,
     accent: state.accent,
     theme: state.theme,
   };
@@ -66,6 +69,7 @@ export const useUi = create<UiState>((set, get) => ({
   role: "coordinator",
   studentId: null,
   monitorId: null,
+  teacherId: null,
   accent: "green",
   theme: "light",
   sidebarOpen: false,
@@ -84,6 +88,7 @@ export const useUi = create<UiState>((set, get) => ({
         role: saved.role && roles.includes(saved.role) ? saved.role : "coordinator",
         studentId: typeof saved.studentId === "string" ? saved.studentId : null,
         monitorId: typeof saved.monitorId === "string" ? saved.monitorId : null,
+        teacherId: typeof saved.teacherId === "string" ? saved.teacherId : null,
         accent,
         theme,
         hydrated: true,
@@ -100,6 +105,7 @@ export const useUi = create<UiState>((set, get) => ({
       role,
       studentId: role === "student" && personId !== undefined ? personId : current.studentId,
       monitorId: role === "monitor" && personId !== undefined ? personId : current.monitorId,
+      teacherId: role === "teacher" && personId !== undefined ? personId : current.teacherId,
     });
     save(snapshot(get()));
   },
