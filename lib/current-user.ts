@@ -5,7 +5,7 @@ import { useMemo } from "react";
 
 import { api, type PeoplePayload } from "@/lib/api";
 import { monitorKindLabels, roleLabels } from "@/lib/constants";
-import type { DemoProfile, HelpRequest, Monitor, PastelKey, Role, Session, Student } from "@/lib/types";
+import type { DemoProfile, HelpRequest, Monitor, PastelKey, Role, Session, Student, Teacher } from "@/lib/types";
 import { useUi } from "@/store/ui";
 
 /**
@@ -33,6 +33,7 @@ export interface CurrentUser {
   incomplete: boolean;
   student: Student | null;
   monitor: Monitor | null;
+  teacher: Teacher | null;
   coordinator: DemoProfile | null;
 }
 
@@ -60,6 +61,7 @@ function fromStudent(student: Student): CurrentUser {
     incomplete: false,
     student,
     monitor: null,
+    teacher: null,
     coordinator: null,
   };
 }
@@ -77,6 +79,25 @@ function fromMonitor(monitor: Monitor): CurrentUser {
     incomplete: false,
     student: null,
     monitor,
+    teacher: null,
+    coordinator: null,
+  };
+}
+
+function fromTeacher(teacher: Teacher): CurrentUser {
+  return {
+    role: "teacher",
+    roleLabel: roleLabels.teacher,
+    id: teacher.id,
+    name: teacher.name,
+    displayName: teacher.name,
+    firstName: firstName(teacher.name),
+    detail: teacher.className,
+    color: teacher.color,
+    incomplete: false,
+    student: null,
+    monitor: null,
+    teacher,
     coordinator: null,
   };
 }
@@ -95,6 +116,7 @@ function fromCoordinator(profile: DemoProfile): CurrentUser {
     incomplete: !name,
     student: null,
     monitor: null,
+    teacher: null,
     coordinator: profile,
   };
 }
@@ -104,6 +126,7 @@ export function resolveCurrentUser(
   role: Role,
   studentId: string | null,
   monitorId: string | null,
+  teacherId: string | null,
 ): CurrentUser | null {
   if (!people) return null;
 
@@ -118,6 +141,11 @@ export function resolveCurrentUser(
     if (monitor) return fromMonitor(monitor);
   }
 
+  if (role === "teacher") {
+    const teacher = people.teachers.find((entry) => entry.id === teacherId) ?? people.teachers[0];
+    if (teacher) return fromTeacher(teacher);
+  }
+
   return fromCoordinator(people.coordinator);
 }
 
@@ -125,13 +153,14 @@ export function useCurrentUser() {
   const role = useUi((state) => state.role);
   const studentId = useUi((state) => state.studentId);
   const monitorId = useUi((state) => state.monitorId);
+  const teacherId = useUi((state) => state.teacherId);
   const hydrated = useUi((state) => state.hydrated);
 
   const people = useQuery({ queryKey: peopleQueryKey, queryFn: api.getPeople, staleTime: 60_000 });
 
   const user = useMemo(
-    () => (hydrated ? resolveCurrentUser(people.data, role, studentId, monitorId) : null),
-    [hydrated, people.data, role, studentId, monitorId],
+    () => (hydrated ? resolveCurrentUser(people.data, role, studentId, monitorId, teacherId) : null),
+    [hydrated, people.data, role, studentId, monitorId, teacherId],
   );
 
   return {
@@ -141,6 +170,16 @@ export function useCurrentUser() {
     isError: people.isError && !people.data,
     retry: people.refetch,
   };
+}
+
+/* --------------------------- espaço de alinhamento ------------------------- */
+
+/** Tópicos do Espaço de alinhamento que o usuário atual pode ver (professor leciona / monitor atende). */
+export function alignmentTopicIds(user: CurrentUser | null): string[] {
+  if (!user) return [];
+  if (user.role === "teacher") return user.teacher?.topics ?? [];
+  if (user.role === "monitor") return user.monitor?.topics.map((entry) => entry.topicId) ?? [];
+  return [];
 }
 
 /* ------------------------------ visibilidade ------------------------------ */

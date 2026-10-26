@@ -317,4 +317,25 @@ export function topicLabel(db: Database, topicId: string) {
   return topicName(db, topicId);
 }
 
+/* --------------------------- espaço de alinhamento ------------------------- */
+
+/**
+ * O Espaço de alinhamento é exclusivo de professor(a) e monitor(a), e só do
+ * tópico que a pessoa leciona/monitora — valida no servidor o mesmo recorte
+ * que o menu já aplica na interface (`lib/constants.ts` → `navItems`).
+ */
+export function canUseAlignmentTopic(
+  db: Database,
+  authorRole: "teacher" | "monitor",
+  authorId: string,
+  topicId: string,
+): boolean {
+  if (authorRole === "teacher") {
+    const teacher = db.teachers.find((entry) => entry.id === authorId);
+    return Boolean(teacher?.topics.includes(topicId));
+  }
+  const monitor = db.monitors.find((entry) => entry.id === authorId);
+  return Boolean(monitor?.topics.some((entry) => entry.topicId === topicId));
+}
+
 export type { Settings, DemoProfile };

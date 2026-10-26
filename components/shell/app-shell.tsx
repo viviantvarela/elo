@@ -11,6 +11,7 @@ import {
   LifeBuoy,
   Lock,
   Menu,
+  MessagesSquare,
   Moon,
   Search,
   Settings,
@@ -27,8 +28,9 @@ import { useEffect, useState } from "react";
 import { SwitchUserDialog } from "@/components/shell/switch-user-dialog";
 import { Avatar, Button, Dialog, EmptyState, Panel, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
-import { canAccess, navItems, roleLabels } from "@/lib/constants";
+import { canAccess, firstAccessibleHref, navItems, roleLabels } from "@/lib/constants";
 import { useCurrentUser, visibleRequests } from "@/lib/current-user";
+import type { Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
@@ -37,6 +39,7 @@ const icons = {
   "life-buoy": LifeBuoy,
   users: Users,
   calendar: CalendarDays,
+  align: MessagesSquare,
   chart: BarChart3,
   settings: Settings,
 } as const;
@@ -392,21 +395,22 @@ function Topbar({ onOpenMenu }: { onOpenMenu: () => void }) {
 /* -------------------------------- app shell ------------------------------- */
 
 /** Página fora do papel atual (ex.: estudante abrindo Relatórios pela URL). */
-function NoAccess({ roleLabel }: { roleLabel: string }) {
+function NoAccess({ role, roleLabel }: { role: Role; roleLabel: string }) {
   const setSwitcherOpen = useUi((state) => state.setSwitcherOpen);
+  const home = firstAccessibleHref(role);
   return (
     <Panel>
       <EmptyState
         icon={<Lock className="size-6" />}
         title="Esta página não faz parte do seu perfil"
-        detail={`Você está usando o Elo como ${roleLabel}. Volte ao painel ou troque de usuário para ver esta página.`}
+        detail={`Você está usando o Elo como ${roleLabel}. Volte para a sua área ou troque de usuário para ver esta página.`}
         action={
           <div className="flex flex-wrap justify-center gap-2">
             <Link
-              href="/painel"
+              href={home}
               className="inline-flex h-9.5 items-center gap-2 rounded-full bg-accent px-4 text-[13px] font-medium text-white transition-colors hover:bg-accent-strong"
             >
-              Ir para o painel
+              Ir para a minha área
             </Link>
             <Button variant="outline" onClick={() => setSwitcherOpen(true)}>
               <ArrowLeftRight className="size-4" /> Trocar de usuário
@@ -488,7 +492,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             ) : canAccess(pathname, user.role) ? (
               children
             ) : (
-              <NoAccess roleLabel={roleLabels[user.role]} />
+              <NoAccess role={user.role} roleLabel={roleLabels[user.role]} />
             )}
           </main>
         </div>
