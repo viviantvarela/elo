@@ -1,22 +1,39 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, GraduationCap, KeyRound, MessagesSquare, ShieldCheck, Sparkles, UserCheck, Users } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, GraduationCap, MessagesSquare, ShieldCheck, Sparkles, UserCheck, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
-import { Logo } from "@/components/shell/app-shell";
-import { Button, Chip, Field, Input, Panel, Segmented, Select } from "@/components/ui";
+
+import { Field, Input, Panel, Select, Segmented } from "@/components/ui";
 import { api } from "@/lib/api";
 import { CAMPUS, firstAccessibleHref } from "@/lib/constants";
-import { getSupabaseBrowserClient, isDemoModeEnabled, isSupabaseClientConfigured } from "@/lib/supabase-browser";
+import {
+  getSupabaseBrowserClient,
+  isDemoModeEnabled,
+  isSupabaseClientConfigured,
+  setSupabaseSessionPersistence,
+} from "@/lib/supabase-browser";
 import type { Role } from "@/lib/types";
 import { useUi } from "@/store/ui";
 
-type Mode = "login" | "signup";
+type Mode = "login" | "signup" | "recovery";
 
 const courses = ["Informática", "Mecatrônica", "Redes de Computadores", "Edificações"];
+
+function EloMark({ dark = false }: { dark?: boolean }) {
+  return (
+    <span className="flex items-center gap-3">
+      <svg viewBox="0 0 64 40" className="h-8 w-12" fill="none" aria-hidden>
+        <rect x="3" y="7" width="34" height="26" rx="13" stroke={dark ? "var(--deep)" : "currentColor"} strokeWidth="5" />
+        <rect x="27" y="7" width="34" height="26" rx="13" stroke="var(--accent)" strokeWidth="5" />
+      </svg>
+      <span className={`text-2xl font-bold tracking-tight ${dark ? "text-deep" : "text-white"}`}>elo</span>
+    </span>
+  );
+}
 
 export default function EntrarPage() {
   const router = useRouter();
@@ -28,8 +45,10 @@ export default function EntrarPage() {
   const demoEnabled = isDemoModeEnabled();
 
   const [mode, setMode] = useState<Mode>("login");
+  const [loginRole, setLoginRole] = useState<"student" | "monitor">("student");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
   const [className, setClassName] = useState("1º ano INFO");
   const [course, setCourse] = useState("Informática");
@@ -37,6 +56,11 @@ export default function EntrarPage() {
   const [guardianConsent, setGuardianConsent] = useState(true);
   const [acceptConsent, setAcceptConsent] = useState(true);
   const [pending, setPending] = useState(false);
+  const [keepConnected, setKeepConnected] = useState(true);
+
+  useEffect(() => {
+    if (window.location.hash.includes("type=recovery")) setMode("recovery");
+  }, []);
 
   const normalizedEmail = email.trim().toLowerCase();
   const isStaffEmail = normalizedEmail.endsWith("@ifrn.edu.br") && !normalizedEmail.endsWith("@escolar.ifrn.edu.br");
@@ -50,6 +74,33 @@ export default function EntrarPage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (mode === "recovery") {
+      if (password.length < 6) {
+        toast.error("A nova senha deve ter pelo menos 6 caracteres.");
+        return;
+      }
+      const sb = getSupabaseBrowserClient();
+      if (!sb) {
+        toast.error("Configure o Supabase para redefinir sua senha.");
+        return;
+      }
+      setPending(true);
+      try {
+        const { error } = await sb.auth.updateUser({ password });
+        if (error) throw new Error(error.message);
+        toast.success("Senha atualizada. Você já pode entrar.");
+        window.history.replaceState(null, "", "/entrar");
+        setPassword("");
+        setMode("login");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Não foi possível atualizar a senha.");
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
+
+    setSupabaseSessionPersistence(keepConnected);
     const sb = getSupabaseBrowserClient();
     if (!sb) {
       toast.error("Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY para usar o login Supabase.");
@@ -133,6 +184,7 @@ export default function EntrarPage() {
         return;
       }
 
+      setSupabaseSessionPersistence(keepConnected);
       const { data, error } = await sb.auth.signInWithPassword({
         email: normalizedEmail,
         password,
@@ -167,68 +219,94 @@ export default function EntrarPage() {
     }
   };
 
+  const requestPasswordReset = async () => {
+    const sb = getSupabaseBrowserClient();
+    if (!sb) {
+      toast.error("Configure o Supabase para recuperar sua senha.");
+      return;
+    }
+    if (!normalizedEmail) {
+      toast.error("Informe seu e-mail institucional primeiro.");
+      return;
+    }
+    setPending(true);
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo: `${window.location.origin}/entrar`,
+      });
+      if (error) throw new Error(error.message);
+      toast.success("Enviamos um link de recuperação para seu e-mail institucional.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível enviar o link de recuperação.");
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
-    <div className="min-h-dvh bg-canvas p-3 sm:p-6">
-      <div className="mx-auto grid min-h-[calc(100dvh-24px)] max-w-[1040px] items-center gap-6 sm:min-h-[calc(100dvh-48px)] lg:grid-cols-[1.05fr_1fr]">
-        {/* Coluna institucional */}
-        <div className="space-y-5 px-2 text-white">
-          <div className="inline-flex rounded-2xl bg-white/95 px-3.5 py-2 shadow-lg">
-            <Logo />
-          </div>
-
-          <div className="space-y-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-200/90">
-              {CAMPUS} · Projeto de Extensão
-            </p>
-            <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em] sm:text-[36px]">
-              Monitoria entre pares com pareamento inteligente e horas certificáveis.
-            </h1>
-            <p className="max-w-lg text-[14px] leading-relaxed text-emerald-50/85">
-              Conecte dúvidas reais a monitores e colegas apoiadores considerando afinidade no tópico, horários em comum,
-              alinhamento direto com professores e equilíbrio de carga semanal.
-            </p>
-          </div>
-
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            {[
-              { title: "Estudantes", desc: "Pedem ajuda por tópico e avaliam o atendimento." },
-              { title: "Monitores", desc: "Aceitam pedidos, agendam e somam horas automáticas." },
-              { title: "Professores", desc: "Alinham foco das aulas com monitores e agendam no Meet." },
-              { title: "Coordenação", desc: "Calibra pesos, gerencia vagas e acompanha indicadores." },
-            ].map((item) => (
-              <div key={item.title} className="rounded-[16px] border border-white/15 bg-white/8 p-3 backdrop-blur-sm">
-                <p className="text-[12.5px] font-semibold text-white">{item.title}</p>
-                <p className="mt-1 text-[11.5px] leading-snug text-emerald-100/80">{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Cartão de autenticação */}
-        <Panel className="p-5 sm:p-6">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-[17px] font-semibold text-ink">
-                {mode === "login" ? "Entrar no Elo" : "Criar conta institucional"}
-              </h2>
-              <p className="text-[12px] text-ink-soft">
-                Autenticação via Supabase Auth para discentes e servidores do IFRN.
-              </p>
+    <div className="min-h-dvh bg-surface">
+      <div className="grid min-h-dvh lg:grid-cols-[1.08fr_1fr]">
+        <section className="relative hidden overflow-hidden bg-deep p-8 text-white lg:flex lg:flex-col lg:justify-between lg:p-12">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-white/95 px-3 py-2">
+              <EloMark dark />
             </div>
-            <Chip tone={supabaseReady ? "accent" : "neutral"}>
-              <KeyRound className="size-3" /> {supabaseReady ? "Supabase ativo" : "Config local"}
-            </Chip>
+          </div>
+          <div className="pointer-events-none absolute -right-32 top-1/4 opacity-30">
+            <svg viewBox="0 0 240 160" className="h-[340px] w-[540px]" fill="none" aria-hidden>
+              <circle cx="92" cy="80" r="52" stroke="var(--accent)" strokeWidth="8" />
+              <circle cx="148" cy="80" r="52" stroke="var(--accent)" strokeWidth="8" />
+            </svg>
+          </div>
+          <div className="relative max-w-xl">
+            <p className="mb-5 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
+              Monitoria entre pares · {CAMPUS}
+            </p>
+            <h1 className="max-w-lg text-5xl font-semibold leading-[0.98] tracking-[-0.04em] xl:text-6xl">
+              Quem sabe ajuda.<br />Quem precisa <span className="text-accent">encontra.</span>
+            </h1>
+            <p className="mt-6 max-w-md text-base leading-relaxed text-white/70">
+              Conecte-se a colegas que dominam o assunto da sua dúvida, no horário que funciona para você.
+            </p>
+            <div className="mt-9 flex max-w-lg flex-wrap gap-2">
+              {["Matemática", "Física", "Português", "Química", "Programação", "Inglês"].map((topic) => (
+                <span key={topic} className="rounded-full border border-white/20 px-3.5 py-1.5 text-xs text-white/85">
+                  {topic}
+                </span>
+              ))}
+            </div>
+          </div>
+          <p className="relative text-xs text-white/45">Projeto de extensão · código aberto</p>
+        </section>
+
+        <section className="flex items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
+          <Panel className="w-full max-w-[440px] border-0 bg-transparent p-0 shadow-none">
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
+            <EloMark dark />
+          </div>
+          <div className="mb-8">
+            <h2 className="text-4xl font-semibold tracking-[-0.04em] text-ink">
+              {mode === "login" ? "Bem-vindo de volta" : mode === "recovery" ? "Redefina sua senha" : "Crie sua conta"}
+            </h2>
+            <p className="mt-2 text-sm text-ink-soft">
+              {mode === "login"
+                ? "Entre com seu e-mail institucional do IFRN."
+                : mode === "recovery"
+                  ? "Escolha uma nova senha para continuar."
+                : "Faça parte da monitoria entre pares."}
+            </p>
           </div>
 
-          <Segmented
-            className="mb-4 w-full"
-            value={mode}
-            onChange={(value) => setMode(value)}
-            options={[
-              { value: "login", label: "Já tenho conta" },
-              { value: "signup", label: "Criar conta IFRN" },
-            ]}
-          />
+          {mode === "login" ? (
+            <div className="mb-6 grid grid-cols-2 rounded-full bg-surface-muted p-1">
+              <button type="button" onClick={() => setLoginRole("student")} className={`rounded-full px-3 py-2.5 text-sm font-semibold transition ${loginRole === "student" ? "bg-surface text-ink shadow-[var(--shadow-card)]" : "text-ink-soft"}`}>
+                Preciso de ajuda
+              </button>
+              <button type="button" onClick={() => setLoginRole("monitor")} className={`rounded-full px-3 py-2.5 text-sm font-semibold transition ${loginRole === "monitor" ? "bg-surface text-ink shadow-[var(--shadow-card)]" : "text-ink-soft"}`}>
+                Sou monitor
+              </button>
+            </div>
+          ) : null}
 
           {!supabaseReady ? (
             <div className="mb-4 rounded-[14px] border border-line bg-surface-muted/70 p-3 text-[12px] leading-snug text-ink-soft">
@@ -251,10 +329,7 @@ export default function EntrarPage() {
               </Field>
             ) : null}
 
-            <Field
-              label="E-mail institucional"
-              hint={mode === "signup" ? "Aceita @escolar.ifrn.edu.br (discentes) ou @ifrn.edu.br (servidores)." : undefined}
-            >
+            <Field label="E-mail institucional" hint={mode === "signup" ? "Use @escolar.ifrn.edu.br ou @ifrn.edu.br." : undefined}>
               <Input
                 type="email"
                 value={email}
@@ -265,14 +340,37 @@ export default function EntrarPage() {
               />
             </Field>
 
-            <Field label="Senha">
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={mode === "signup" ? "Mínimo de 6 caracteres" : "Sua senha"}
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-              />
+            <Field label={mode === "recovery" ? "Nova senha" : "Senha"}>
+              {mode === "login" ? (
+                <div className="mb-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void requestPasswordReset()}
+                    disabled={pending}
+                    className="text-xs font-medium text-accent-strong hover:underline"
+                  >
+                    Esqueci a senha
+                  </button>
+                </div>
+              ) : null}
+              <div className="relative">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={mode === "signup" || mode === "recovery" ? "Mínimo de 6 caracteres" : "Sua senha"}
+                  autoComplete={mode === "signup" || mode === "recovery" ? "new-password" : "current-password"}
+                  className="pr-11"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-ink-faint hover:text-ink"
+                >
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
             </Field>
 
             {mode === "signup" && isStaffEmail ? (
@@ -351,11 +449,53 @@ export default function EntrarPage() {
               </div>
             ) : null}
 
-            <Button type="submit" className="w-full justify-center" disabled={pending || !supabaseReady}>
-              {pending ? "Autenticando…" : mode === "login" ? "Entrar com e-mail institucional" : "Criar conta e entrar"}
+            {mode === "login" ? (
+              <label className="flex items-center gap-2 text-sm text-ink-soft">
+                <input type="checkbox" className="size-4 accent-[var(--accent)]" /> Manter conectado
+              </label>
+            ) : null}
+
+            <button type="submit" className="group flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white shadow-[var(--shadow-card)] transition hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60" disabled={pending || !supabaseReady}>
+              {pending ? "Aguarde…" : mode === "login" ? "Entrar" : mode === "recovery" ? "Atualizar senha" : "Criar conta e entrar"}
               <ArrowRight className="size-4" />
-            </Button>
+            </button>
           </form>
+
+          {mode === "login" ? (
+            <>
+              <div className="my-7 flex items-center gap-4 text-[10px] uppercase tracking-[0.2em] text-ink-faint">
+                <span className="h-px flex-1 bg-line" /> ou <span className="h-px flex-1 bg-line" />
+              </div>
+              <button
+                type="button"
+                onClick={() => toast.info("A integração com o SUAP ainda precisa ser configurada.")}
+                className="flex h-11 w-full items-center justify-center gap-3 rounded-xl border border-line bg-surface text-sm font-semibold text-ink transition hover:border-accent"
+              >
+                <span className="grid size-6 place-items-center rounded-md bg-accent-soft text-xs font-bold text-accent-strong">S</span>
+                Entrar com SUAP
+              </button>
+              <p className="mt-7 text-center text-sm text-ink-soft">
+                Primeira vez aqui?{" "}
+                <button type="button" onClick={() => setMode("signup")} className="font-semibold text-accent-strong underline decoration-accent decoration-2 underline-offset-4">
+                  Criar conta
+                </button>
+              </p>
+            </>
+          ) : mode === "signup" ? (
+            <p className="mt-7 text-center text-sm text-ink-soft">
+              Já possui uma conta?{" "}
+              <button type="button" onClick={() => setMode("login")} className="font-semibold text-accent-strong underline decoration-accent decoration-2 underline-offset-4">
+                Entrar
+              </button>
+            </p>
+          ) : (
+            <p className="mt-7 text-center text-sm text-ink-soft">
+              Lembrou a senha?{" "}
+              <button type="button" onClick={() => setMode("login")} className="font-semibold text-accent-strong underline decoration-accent decoration-2 underline-offset-4">
+                Voltar para entrar
+              </button>
+            </p>
+          )}
 
           {demoEnabled ? (
             <div className="mt-5 border-t border-line pt-4">
@@ -409,7 +549,9 @@ export default function EntrarPage() {
               </p>
             </div>
           ) : null}
-        </Panel>
+          <p className="mt-7 text-center text-xs text-ink-faint">Seus dados são tratados conforme a LGPD.</p>
+          </Panel>
+        </section>
       </div>
     </div>
   );
